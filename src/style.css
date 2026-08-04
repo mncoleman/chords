@@ -206,6 +206,19 @@ pre.lyric { color: var(--fg); }
 }
 
 /* --------------------------------------------------------------- admin ---- */
+/* The only way into user management from the installed app, so it is pinned
+   where it is always visible — and below the Dynamic Island. */
+.topbar {
+  position: fixed; top: 0; right: 0; z-index: 6;
+  padding: calc(0.55rem + env(safe-area-inset-top, 0px)) 1rem 0.55rem;
+}
+.topbar a {
+  color: var(--muted); text-decoration: none; font-size: 0.84rem;
+  border: 1px solid var(--line); border-radius: 999px; padding: 0.4rem 0.8rem;
+}
+.topbar a:hover { color: var(--fg); }
+@media print { .topbar { display: none; } }
+
 .admin h2 { font-size: 0.95rem; margin: 0 0 0.3rem; }
 .panel { margin: 1.75rem 0; }
 .small { font-size: 0.8rem; }

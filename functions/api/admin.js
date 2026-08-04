@@ -37,7 +37,7 @@ async function requireAdmin({ request, env }) {
   const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET, 'session');
   if (!payload || !payload.sub) return { error: json({ error: 'Not signed in' }, 401) };
   const owner = String(payload.sub) === String(env.OWNER_SUB);
-  if (!owner && payload.role !== 'admin') {
+  if (!owner && !/admin/.test(String(payload.role || ''))) {
     return { error: json({ error: 'Admins only' }, 403) };
   }
   return { payload, owner };

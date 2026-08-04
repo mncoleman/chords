@@ -231,9 +231,15 @@ async function handle(ctx) {
 
   if (step === 'me') {
     const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET);
+    // `admin` is computed, not read from the token: the owner is an admin by
+    // virtue of OWNER_SUB, and sessions minted before the roles were renamed
+    // still say "super_admin". A stale session must not lose the admin UI.
+    const admin = payload
+      ? String(payload.sub) === String(env.OWNER_SUB) || /admin/.test(String(payload.role || ''))
+      : false;
     return Response.json(
       payload
-        ? { authed: true, name: payload.name ?? null, role: payload.role ?? null }
+        ? { authed: true, name: payload.name ?? null, role: payload.role ?? null, admin }
         : { authed: false },
       { headers: { 'Cache-Control': 'no-store' } }
     );

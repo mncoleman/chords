@@ -103,6 +103,7 @@ function renderSymbol(sym: string): string {
 // ---------------------------------------------------------------------------
 function renderHome(msg?: string): void {
   main.innerHTML = `
+    <div class="topbar" id="admin-link"></div>
     <section class="hero">
       <h1 class="wordmark">chords</h1>
       <p class="tag">Search a song. Transpose it, read it in numbers, print it.</p>
@@ -115,15 +116,14 @@ function renderHome(msg?: string): void {
       <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
       ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
       <div id="results" class="results"></div>
-      <p id="admin-link" class="muted small"></p>
     </section>`;
   wireSearch();
   void (async () => {
     try {
       const me = await (await fetch('/api/auth/me')).json();
-      if (me.role === 'admin') {
+      if (me.admin) {
         const el = document.getElementById('admin-link');
-        if (el) el.innerHTML = '<a href="#/admin">Manage users</a>';
+        if (el) el.innerHTML = '<a href="#/admin">Users</a>';
       }
     } catch {
       /* the link is a convenience; the page works without it */
