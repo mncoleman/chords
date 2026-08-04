@@ -1,5 +1,6 @@
 import './style.css';
 import {
+  inferKey,
   intervalForSemitones,
   keyIsMinor,
   keyTonicOf,
@@ -43,6 +44,9 @@ let sheet: Sheet | null = null;
 let lines: SheetLine[] = [];
 let semitones = 0;
 let numbers = false;
+/** Filled in when UG ships a chart with no tonality of its own. */
+let inferredKey: string | null = null;
+let condensed = false;
 let searchSeq = 0;
 let lastQuery = '';
 
@@ -71,8 +75,13 @@ const esc = (s: string) =>
 // ---------------------------------------------------------------------------
 // Chord display
 // ---------------------------------------------------------------------------
+/** The key UG gave us, or the one we worked out from the chords. */
+function effectiveKey(): string | null {
+  return sheet?.key || inferredKey;
+}
+
 function displayedTonic(): string | null {
-  const tonic = keyTonicOf(sheet?.key ?? null);
+  const tonic = keyTonicOf(effectiveKey());
   if (!tonic) return null;
   return transposeSymbol(tonic, intervalForSemitones(semitones)).split('/')[0];
 }
@@ -80,7 +89,7 @@ function displayedTonic(): string | null {
 function displayedKey(): string | null {
   const t = displayedTonic();
   if (!t) return null;
-  return keyIsMinor(sheet!.key) ? `${t}m` : t;
+  return keyIsMinor(effectiveKey()) ? `${t}m` : t;
 }
 
 function renderSymbol(sym: string): string {
@@ -300,6 +309,7 @@ async function renderSheet(id: string): Promise<void> {
     if (data.error) throw new Error(data.error);
     sheet = data as Sheet;
     lines = parseSheet(sheet.content);
+    inferredKey = sheet.key ? null : inferKey(lines.flatMap((l) => l.chords.map((c) => c.symbol)));
     semitones = 0;
     numbers = false;
     document.title = `${sheet.song} — ${sheet.artist} · chords`;
@@ -312,6 +322,60 @@ async function renderSheet(id: string): Promise<void> {
         <p><a href="#/">← Search again</a></p>
       </section>`;
   }
+}
+
+/** ASCII tablature — six pitch rows of dashes and fret numbers. Faithful, but
+ *  it costs a third of a page and repeats what the chord symbols already say. */
+const TAB_LINE_RE = /^\s*[eBGDAE]\s*\|[-0-9|~/\\hpbrx*\s]*$/;
+
+/** "Verse 2" and "Verse 3" carry the same chords as "Verse 1"; only the words
+ *  change. Strip the number so they group. */
+function sectionBase(section: string | undefined): string {
+  return (section || '').replace(/\s*\d+\s*$/, '').trim().toLowerCase();
+}
+
+/** Drop everything that repeats, so a song fits on one page.
+ *
+ *  The first verse, chorus and bridge keep their chords. Later verses keep
+ *  their words but lose the chord line, because it is the same chord line —
+ *  which is exactly what you already know by the second verse. Tablature and
+ *  instrumental runs inside a repeat go entirely. */
+function condense(all: SheetLine[]): SheetLine[] {
+  const charted = new Set<string>();
+  const out: SheetLine[] = [];
+  // Decided once per section HEADING, not per line: every line of the first
+  // chorus keeps its chords, and every line of the second loses them.
+  let repeat = false;
+
+  for (const l of all) {
+    if (l.section !== undefined) {
+      const base = sectionBase(l.section);
+      repeat = charted.has(base);
+      charted.add(base);
+    }
+    if (TAB_LINE_RE.test(l.lyric)) continue;
+
+    if (!repeat) {
+      out.push(l);
+      continue;
+    }
+
+    // A repeat with no words of its own is pure instrumental — nothing to keep.
+    if (!l.lyric.trim()) {
+      if (l.section) out.push({ section: l.section, chords: [], lyric: '' });
+      continue;
+    }
+    out.push({ section: l.section, chords: [], lyric: l.lyric });
+  }
+
+  // Condensing leaves runs of blank lines behind; collapse them.
+  return out.filter(
+    (l, i) =>
+      l.section ||
+      l.chords.length ||
+      l.lyric.trim() ||
+      (i > 0 && (out[i - 1].lyric.trim() || out[i - 1].chords.length))
+  );
 }
 
 /** One chord sitting above one run of lyric text. */
@@ -396,14 +460,15 @@ function drawSheet(): void {
       </div>
       <div class="ctl seg">
         <button id="m-let" class="${numbers ? '' : 'on'}" aria-label="Show chords as letters"><span class="wide">Letters</span><span class="narrow">ABC</span></button>
-        <button id="m-num" class="${numbers ? 'on' : ''}" ${sheet.key ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
+        <button id="m-num" class="${numbers ? 'on' : ''}" ${effectiveKey() ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
       </div>
+      <button id="cond" class="${condensed ? 'on' : ''}" aria-pressed="${condensed}" aria-label="Condense repeated sections" title="Chords once per section; later verses keep their words only"><span class="wide">${condensed ? 'Condensed' : 'Full chart'}</span><span class="narrow">${condensed ? 'Short' : 'Full'}</span></button>
       <div class="spacer"></div>
       <button id="print" class="primary" aria-label="Print or save as PDF"><span class="wide">Print / PDF</span><span class="narrow">PDF</span></button>
     </div>`;
 
   const meta = [
-    key ? `Key of ${key}` : null,
+    key ? `Key of ${key}${!sheet.key && inferredKey ? ' (detected)' : ''}` : null,
     semitones ? `transposed ${shift}` : null,
     numbers ? 'Nashville numbers' : null,
     sheet.capo ? `Capo ${sheet.capo}` : null,
@@ -412,7 +477,7 @@ function drawSheet(): void {
     .filter(Boolean)
     .join(' · ');
 
-  const body = lines
+  const body = (condensed ? condense(lines) : lines)
     .map((l) => {
       const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
       if (!row && !l.lyric.trim() && !l.section) return '<div class="gap"></div>';
@@ -465,10 +530,14 @@ function drawSheet(): void {
     drawSheet();
   });
   on('m-num', () => {
-    if (sheet!.key) {
+    if (effectiveKey()) {
       numbers = true;
       drawSheet();
     }
+  });
+  on('cond', () => {
+    condensed = !condensed;
+    drawSheet();
   });
   on('print', () => window.print());
 }

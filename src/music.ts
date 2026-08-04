@@ -61,6 +61,78 @@ export function toNashville(symbol: string, keyTonic: string | null): string {
   return `${num}/${bacc}${biv.simple}`;
 }
 
+/** Diatonic triads of a scale: semitone offsets from the tonic and the quality
+ *  normally built on each. 'd' is diminished. */
+const MAJOR_SCALE = { steps: [0, 2, 4, 5, 7, 9, 11], quals: ['M', 'm', 'm', 'M', 'M', 'm', 'd'] };
+const MINOR_SCALE = { steps: [0, 2, 3, 5, 7, 8, 10], quals: ['m', 'd', 'M', 'm', 'm', 'M', 'M'] };
+
+/** What a chord suffix says about the triad underneath it. Suspensions name no
+ *  third at all, so they are a wildcard rather than evidence either way. */
+function qualityOf(suffix: string): 'M' | 'm' | 'd' | '*' {
+  if (/^(?:m|min)(?!aj)/.test(suffix)) return 'm';
+  if (/^(?:dim|°|o\b)/.test(suffix)) return 'd';
+  if (/^sus/.test(suffix)) return '*';
+  return 'M';
+}
+
+/** Guess the key from the chords themselves.
+ *
+ *  Ultimate Guitar often ships a chart with no tonality set, which used to
+ *  leave Nashville numbers greyed out — the numbers need a tonic to count from.
+ *  Scoring the chords against all 24 keys recovers one: chords that are
+ *  diatonic score, chords that are not cost, and the chords a song starts and
+ *  ends on break the ties, since both overwhelmingly tend to be the tonic. */
+export function inferKey(symbols: string[]): string | null {
+  const roots: { pc: number; qual: string }[] = [];
+  for (const sym of symbols) {
+    // The bass of a slash chord names an inversion, not a root.
+    const m = sym.split('/')[0].match(ROOT_RE);
+    if (!m) continue;
+    const pc = Note.chroma(m[1]);
+    if (pc === undefined) continue;
+    roots.push({ pc, qual: qualityOf(m[2]) });
+  }
+  if (roots.length < 2) return null;
+
+  const tally = new Map<number, number>();
+  for (const r of roots) tally.set(r.pc, (tally.get(r.pc) || 0) + 1);
+  const commonest = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const first = roots[0].pc;
+  const last = roots[roots.length - 1].pc;
+
+  let best: { name: string; score: number } | null = null;
+
+  for (let tonic = 0; tonic < 12; tonic++) {
+    for (const [scale, minor] of [
+      [MAJOR_SCALE, false],
+      [MINOR_SCALE, true],
+    ] as const) {
+      let score = 0;
+      for (const r of roots) {
+        const deg = scale.steps.indexOf(((r.pc - tonic) % 12 + 12) % 12);
+        if (deg < 0) {
+          score -= 1; // out of key
+          continue;
+        }
+        const want = scale.quals[deg];
+        // A minor key almost always borrows the major V (harmonic minor).
+        const ok = r.qual === '*' || r.qual === want || (minor && deg === 4 && r.qual === 'M');
+        score += ok ? 2 : 0.5;
+      }
+      if (last === tonic) score += 3;
+      if (first === tonic) score += 2;
+      if (commonest === tonic) score += 1;
+
+      if (!best || score > best.score) {
+        const name = Note.pitchClass(Note.fromMidi(60 + tonic)) || '';
+        best = { name: minor ? `${name}m` : name, score };
+      }
+    }
+  }
+
+  return best ? best.name : null;
+}
+
 /** Tonic of a key string that may carry a minor suffix ("Am" -> "A"). */
 export function keyTonicOf(key: string | null): string | null {
   if (!key) return null;
