@@ -1,452 +1,431 @@
 import './style.css';
-import type { Chart, ChartLine, IndexEntry, SongIndex } from './types';
-import { intervalForSemitones, keyIsMinor, keyTonicOf, toNashville, transposeSymbol } from './music';
+import {
+  intervalForSemitones,
+  keyIsMinor,
+  keyTonicOf,
+  toNashville,
+  transposeSymbol,
+} from './music';
+import { layoutChords, parseSheet, type SheetLine } from './ug';
 
-const REPO_URL = 'https://github.com/mncoleman/chords';
+// Chord sheets come from Ultimate Guitar's mobile API, proxied through
+// /api/ug — UG sends no CORS headers, and the request has to be signed, so it
+// cannot happen in the browser. Everything after that is local: parsing,
+// transposition, Nashville numbers and printing.
+
+interface Hit {
+  id: number;
+  song: string;
+  artist: string;
+  rating: number;
+  votes: number;
+  verified: boolean;
+  url: string | null;
+}
+
+interface Sheet {
+  id: number;
+  song: string;
+  artist: string;
+  key: string | null;
+  capo: number | null;
+  tuning: string | null;
+  rating: number | null;
+  votes: number | null;
+  url: string | null;
+  content: string;
+}
 
 const main = document.getElementById('main')!;
-const searchInput = document.getElementById('search-input') as HTMLInputElement;
-const searchResults = document.getElementById('search-results') as HTMLUListElement;
 
-let index: IndexEntry[] = [];
-let highlighted = -1;
-
-/** Autosuggestions for songs NOT in the library, from the iTunes Search API
- *  (one of the few music search APIs that serves CORS to any origin). */
-interface WebHit {
-  title: string;
-  artist: string;
-}
-let webHits: WebHit[] = [];
-let webTimer: number | undefined;
-let webSeq = 0;
-
-// ---------------------------------------------------------------------------
-// View state for the open chart
-// ---------------------------------------------------------------------------
-let chart: Chart | null = null;
+let hits: Hit[] = [];
+let sheet: Sheet | null = null;
+let lines: SheetLine[] = [];
 let semitones = 0;
 let numbers = false;
+let searchSeq = 0;
+let lastQuery = '';
 
-function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+interface Suggestion {
+  id: string;
+  title: string;
+  artist: string;
+  year: string | null;
+  art: string | null;
 }
+let acItems: Suggestion[] = [];
+let acIndex = -1;
+let acTimer: number | undefined;
+let acSeq = 0;
 
-function norm(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '');
-}
+const esc = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 // ---------------------------------------------------------------------------
-// Search
+// Chord display
 // ---------------------------------------------------------------------------
-function matches(q: string): IndexEntry[] {
-  const nq = norm(q).trim();
-  if (!nq) return index;
-  const terms = nq.split(/\s+/);
-  return index.filter((e) => {
-    const hay = norm(`${e.title} ${e.artist}`);
-    return terms.every((t) => hay.includes(t));
-  });
-}
-
-async function fetchWebHits(q: string): Promise<void> {
-  const seq = ++webSeq;
-  try {
-    const res = await fetch(
-      `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=6`
-    );
-    if (!res.ok) return;
-    const data = await res.json();
-    if (seq !== webSeq) return; // a newer query superseded this one
-    const seen = new Set<string>();
-    webHits = (data.results || [])
-      .map((r: { trackName?: string; artistName?: string }) => ({
-        title: r.trackName || '',
-        artist: r.artistName || '',
-      }))
-      .filter((h: WebHit) => {
-        if (!h.title || !h.artist) return false;
-        const k = norm(`${h.title}|${h.artist}`);
-        if (seen.has(k)) return false;
-        seen.add(k);
-        // Hide web suggestions the library already covers.
-        return !index.some(
-          (e) => norm(e.title) === norm(h.title) && norm(e.artist) === norm(h.artist)
-        );
-      })
-      .slice(0, 5);
-    renderSearchResults();
-  } catch {
-    /* suggestions are best-effort; the library search still works */
-  }
-}
-
-function renderSearchResults(): void {
-  const q = searchInput.value;
-  const hits = q.trim() ? matches(q).slice(0, 8) : [];
-  if (document.activeElement !== searchInput || !q.trim()) {
-    searchResults.hidden = true;
-    return;
-  }
-  const rows: string[] = [];
-  const all: { kind: 'lib' | 'web'; idx: number }[] = [];
-  hits.forEach((e, i) => {
-    all.push({ kind: 'lib', idx: i });
-    rows.push(`
-      <li data-slug="${esc(e.slug)}" data-n="${all.length - 1}" class="${all.length - 1 === highlighted ? 'hl' : ''}" role="option">
-        <span class="t">${esc(e.title)}</span>
-        <span class="a">${esc(e.artist)}</span>
-        <span class="k">${e.key ? esc(e.key) : ''}</span>
-      </li>`);
-  });
-  if (webHits.length) {
-    rows.push(`<li class="group-label">Not in the library yet — pick one to request it</li>`);
-    webHits.forEach((h, i) => {
-      all.push({ kind: 'web', idx: i });
-      rows.push(`
-        <li data-req="${esc(encodeURIComponent(h.title))}|${esc(encodeURIComponent(h.artist))}" data-n="${all.length - 1}" class="web ${all.length - 1 === highlighted ? 'hl' : ''}" role="option">
-          <span class="t">${esc(h.title)}</span>
-          <span class="a">${esc(h.artist)}</span>
-          <span class="k">request</span>
-        </li>`);
-    });
-  }
-  if (!rows.length) {
-    rows.push(`<li class="no-hit">Searching… — or see <a href="#/about">how songs get added</a></li>`);
-  }
-  searchResults.innerHTML = rows.join('');
-  searchResults.hidden = false;
-}
-
-searchInput.addEventListener('input', () => {
-  highlighted = -1;
-  webHits = [];
-  window.clearTimeout(webTimer);
-  const q = searchInput.value.trim();
-  if (q.length >= 2) {
-    webTimer = window.setTimeout(() => void fetchWebHits(q), 300);
-  }
-  renderSearchResults();
-});
-function activate(li: HTMLLIElement): void {
-  if (li.dataset.slug) {
-    go(`#/s/${li.dataset.slug}`);
-  } else if (li.dataset.req) {
-    const [t, a] = li.dataset.req.split('|');
-    go(`#/request/${t}/${a}`);
-  }
-}
-
-searchInput.addEventListener('focus', renderSearchResults);
-searchInput.addEventListener('keydown', (ev) => {
-  const items = searchResults.querySelectorAll<HTMLLIElement>('li[data-n]');
-  if (ev.key === 'ArrowDown') {
-    highlighted = Math.min(highlighted + 1, items.length - 1);
-    renderSearchResults();
-    ev.preventDefault();
-  } else if (ev.key === 'ArrowUp') {
-    highlighted = Math.max(highlighted - 1, -1);
-    renderSearchResults();
-    ev.preventDefault();
-  } else if (ev.key === 'Enter') {
-    const pick = highlighted >= 0 ? items[highlighted] : items[0];
-    if (pick) activate(pick);
-  } else if (ev.key === 'Escape') {
-    searchResults.hidden = true;
-    searchInput.blur();
-  }
-});
-searchResults.addEventListener('mousedown', (ev) => {
-  const li = (ev.target as HTMLElement).closest<HTMLLIElement>('li[data-n]');
-  if (li) activate(li);
-});
-document.addEventListener('click', (ev) => {
-  if (!(ev.target as HTMLElement).closest('.search')) searchResults.hidden = true;
-});
-
-function go(hash: string): void {
-  searchResults.hidden = true;
-  searchInput.blur();
-  if (location.hash === hash) route();
-  else location.hash = hash;
-}
-
-// ---------------------------------------------------------------------------
-// Chart rendering
-// ---------------------------------------------------------------------------
-function renderSymbol(sym: string): string {
-  const t = transposeSymbol(sym, intervalForSemitones(semitones));
-  if (!numbers) return t;
-  const tonic = displayedTonic();
-  return toNashville(t, tonic);
-}
-
 function displayedTonic(): string | null {
-  if (!chart?.key) return null;
-  const tonic = keyTonicOf(chart.key);
+  const tonic = keyTonicOf(sheet?.key ?? null);
   if (!tonic) return null;
   return transposeSymbol(tonic, intervalForSemitones(semitones)).split('/')[0];
 }
 
 function displayedKey(): string | null {
-  const tonic = displayedTonic();
-  if (!tonic) return null;
-  return keyIsMinor(chart!.key) ? `${tonic}m` : tonic;
+  const t = displayedTonic();
+  if (!t) return null;
+  return keyIsMinor(sheet!.key) ? `${t}m` : t;
 }
 
-/** Lay chord symbols out above a lyric line at their character offsets. */
-function chordRow(line: ChartLine): string {
-  let row = '';
-  for (const c of [...line.chords].sort((a, b) => a.at - b.at)) {
-    const label = renderSymbol(c.symbol);
-    const at = Math.max(0, Math.min(c.at, line.text.length));
-    if (at < row.length) row += ' '; // never let two chords collide
-    else row = row.padEnd(at, ' ');
-    row += label;
+function renderSymbol(sym: string): string {
+  if (/^N\.?C\.?$/.test(sym)) return sym;
+  const t = transposeSymbol(sym, intervalForSemitones(semitones));
+  return numbers ? toNashville(t, displayedTonic()) : t;
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+function renderHome(msg?: string): void {
+  main.innerHTML = `
+    <section class="hero">
+      <h1 class="wordmark">chords</h1>
+      <p class="tag">Search a song. Transpose it, read it in numbers, print it.</p>
+      <form class="hero-search" id="hero-form" role="search" autocomplete="off">
+        <input id="q" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+               role="combobox" aria-expanded="false" aria-autocomplete="list"
+               placeholder="Search for a song…" aria-label="Search for a song">
+        <button type="submit" aria-label="Search">→</button>
+      </form>
+      <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
+      ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
+      <div id="results" class="results"></div>
+    </section>`;
+  wireSearch();
+}
+
+/** Spotify typeahead. It exists to fix the spelling and save the typing — the
+ *  chosen title and artist are then handed to Ultimate Guitar, which is where
+ *  the chords actually come from. */
+async function suggest(q: string): Promise<void> {
+  const seq = ++acSeq;
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (seq !== acSeq) return; // a later keystroke already won
+    acItems = data.tracks ?? [];
+  } catch {
+    if (seq !== acSeq) return;
+    acItems = [];
   }
-  return row;
+  acIndex = -1;
+  drawAutocomplete();
 }
 
-function confidenceBadge(c: Chart['confidence']): string {
-  const label = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' }[c];
-  return `<span class="badge badge-${c}">${label}</span>`;
+function drawAutocomplete(): void {
+  const ul = document.getElementById('ac');
+  const input = document.getElementById('q') as HTMLInputElement | null;
+  if (!ul) return;
+  if (!acItems.length) {
+    ul.hidden = true;
+    ul.innerHTML = '';
+    input?.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  ul.innerHTML = acItems
+    .map(
+      (t, i) => `
+      <li role="option" data-i="${i}" class="${i === acIndex ? 'on' : ''}" aria-selected="${i === acIndex}">
+        ${t.art ? `<img src="${esc(t.art)}" alt="" loading="lazy">` : '<span class="noart"></span>'}
+        <span class="st">
+          <span class="t">${esc(t.title)}</span>
+          <span class="a">${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ''}</span>
+        </span>
+      </li>`
+    )
+    .join('');
+  ul.hidden = false;
+  input?.setAttribute('aria-expanded', 'true');
 }
 
-function agreementIcon(a: string): string {
-  if (a === 'agrees') return '<span class="agree" title="Agrees with the consensus">●</span>';
-  if (a === 'differs') return '<span class="differ" title="Differs from the consensus">●</span>';
-  return '<span class="partial" title="Partially agrees">●</span>';
+function pickSuggestion(i: number): void {
+  const t = acItems[i];
+  if (!t) return;
+  const input = document.getElementById('q') as HTMLInputElement | null;
+  // Fill the box with the corrected spelling, then go straight to the chords.
+  if (input) input.value = `${t.title} ${t.artist}`;
+  acItems = [];
+  drawAutocomplete();
+  void search(`${t.title} ${t.artist}`);
 }
 
-function renderChart(): void {
-  if (!chart) return;
+function wireSearch(): void {
+  const form = document.getElementById('hero-form') as HTMLFormElement | null;
+  const input = document.getElementById('q') as HTMLInputElement | null;
+  const ul = document.getElementById('ac');
+  if (!form || !input) return;
+
+  // Ready to type the moment the page opens — that is the whole interaction.
+  input.focus();
+  if (lastQuery) {
+    input.value = lastQuery;
+    input.select();
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    window.clearTimeout(acTimer);
+    if (q.length < 2) {
+      acItems = [];
+      drawAutocomplete();
+      return;
+    }
+    acTimer = window.setTimeout(() => void suggest(q), 200);
+  });
+
+  input.addEventListener('keydown', (ev) => {
+    if (!acItems.length || (ul as HTMLElement)?.hidden) return;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      acIndex =
+        ev.key === 'ArrowDown'
+          ? Math.min(acItems.length - 1, acIndex + 1)
+          : Math.max(-1, acIndex - 1);
+      drawAutocomplete();
+    } else if (ev.key === 'Enter' && acIndex >= 0) {
+      ev.preventDefault();
+      pickSuggestion(acIndex);
+    } else if (ev.key === 'Escape') {
+      acItems = [];
+      drawAutocomplete();
+    }
+  });
+
+  ul?.addEventListener('mousedown', (ev) => {
+    const li = (ev.target as HTMLElement).closest('li');
+    if (li?.dataset.i) {
+      ev.preventDefault();
+      pickSuggestion(Number(li.dataset.i));
+    }
+  });
+
+  document.addEventListener('click', (ev) => {
+    if (!(ev.target as HTMLElement).closest('.hero-search, .autocomplete')) {
+      acItems = [];
+      drawAutocomplete();
+    }
+  });
+
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    // Enter with a highlighted suggestion takes it; otherwise search what was typed.
+    if (acIndex >= 0 && acItems[acIndex]) {
+      pickSuggestion(acIndex);
+      return;
+    }
+    const q = input.value.trim();
+    if (q.length >= 2) {
+      acItems = [];
+      drawAutocomplete();
+      void search(q);
+    }
+  });
+}
+
+async function search(q: string): Promise<void> {
+  lastQuery = q;
+  const seq = ++searchSeq;
+  const box = document.getElementById('results');
+  if (box) box.innerHTML = `<p class="muted loading">Searching…</p>`;
+
+  try {
+    const res = await fetch(`/api/ug?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (seq !== searchSeq) return;
+    if (data.error) throw new Error(data.error);
+    hits = data.results ?? [];
+  } catch (e) {
+    if (seq !== searchSeq) return;
+    const box2 = document.getElementById('results');
+    if (box2) box2.innerHTML = `<p class="muted">Search failed: ${esc((e as Error).message)}</p>`;
+    return;
+  }
+  renderResults();
+}
+
+function renderResults(): void {
+  const box = document.getElementById('results');
+  if (!box) return;
+  if (!hits.length) {
+    box.innerHTML = `<p class="muted">Nothing found. Try the artist name as well.</p>`;
+    return;
+  }
+  box.innerHTML = `
+    <ul class="hitlist">
+      ${hits
+        .map(
+          (h) => `
+        <li>
+          <a href="#/t/${h.id}">
+            <span class="st">
+              <span class="t">${esc(h.song)}</span>
+              <span class="a">${esc(h.artist)}</span>
+            </span>
+            <span class="rt">
+              ${h.verified ? '<span class="ver" title="Verified by Ultimate Guitar">✓</span>' : ''}
+              <span class="stars">${h.rating ? h.rating.toFixed(1) : '—'}★</span>
+              <span class="votes">${h.votes.toLocaleString()}</span>
+            </span>
+          </a>
+        </li>`
+        )
+        .join('')}
+    </ul>`;
+}
+
+async function renderSheet(id: string): Promise<void> {
+  main.innerHTML = `<p class="muted loading">Loading chart…</p>`;
+  try {
+    const res = await fetch(`/api/ug?id=${encodeURIComponent(id)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    sheet = data as Sheet;
+    lines = parseSheet(sheet.content);
+    semitones = 0;
+    numbers = false;
+    document.title = `${sheet.song} — ${sheet.artist} · chords`;
+    drawSheet();
+  } catch (e) {
+    main.innerHTML = `
+      <section class="hero">
+        <h1>Couldn't load that chart</h1>
+        <p class="muted">${esc((e as Error).message)}</p>
+        <p><a href="#/">← Search again</a></p>
+      </section>`;
+  }
+}
+
+function drawSheet(): void {
+  if (!sheet) return;
   const key = displayedKey();
   const shift = semitones > 0 ? `+${semitones}` : `${semitones}`;
 
   const toolbar = `
     <div class="toolbar screen-only">
+      <a class="back" href="#/" title="Back to search">←</a>
       <div class="ctl">
         <span class="lbl">Key</span>
         <strong class="key">${key ? esc(key) : '—'}</strong>
-        <button id="tr-down" title="Transpose down a semitone" aria-label="Transpose down">−</button>
+        <button id="tr-down" aria-label="Transpose down">−</button>
         <span class="shift">${shift}</span>
-        <button id="tr-up" title="Transpose up a semitone" aria-label="Transpose up">+</button>
-        <button id="tr-reset" title="Reset transposition" ${semitones ? '' : 'disabled'}>reset</button>
+        <button id="tr-up" aria-label="Transpose up">+</button>
+        <button id="tr-reset" ${semitones ? '' : 'disabled'}>reset</button>
       </div>
       <div class="ctl seg">
-        <button id="mode-letters" class="${numbers ? '' : 'on'}">Letters</button>
-        <button id="mode-numbers" class="${numbers ? 'on' : ''}" ${chart.key ? '' : 'disabled title="Needs a known key"'}>Numbers</button>
+        <button id="m-let" class="${numbers ? '' : 'on'}">Letters</button>
+        <button id="m-num" class="${numbers ? 'on' : ''}" ${sheet.key ? '' : 'disabled'}>Numbers</button>
       </div>
       <div class="spacer"></div>
-      ${confidenceBadge(chart.confidence)}
-      <button id="print-btn" class="primary" title="Print or save as PDF">Print / PDF</button>
+      <button id="print" class="primary">Print / PDF</button>
     </div>`;
 
-  const masthead = `
-    <header class="masthead">
-      <h1>${esc(chart.title)}</h1>
-      <p class="byline">${esc(chart.artist)}</p>
-      <p class="meta">
-        ${key ? `Key of ${esc(key)}` : 'Key unknown'}${
-          semitones ? ` (transposed ${shift})` : ''
-        }${numbers ? ' · Nashville numbers' : ''}
-      </p>
-    </header>`;
+  const meta = [
+    key ? `Key of ${key}` : null,
+    semitones ? `transposed ${shift}` : null,
+    numbers ? 'Nashville numbers' : null,
+    sheet.capo ? `Capo ${sheet.capo}` : null,
+    sheet.tuning ? `Tuning ${sheet.tuning}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
-  let body = '';
-  if (chart.mode === 'lyrics' && chart.lines.length) {
-    body = `<div class="sheet">${chart.lines
-      .map((line) => {
-        const row = chordRow(line);
-        return `
-        <div class="pair">
-          ${line.section ? `<div class="section">${esc(line.section)}</div>` : ''}
-          ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
-          <pre class="lyric">${esc(line.text) || ' '}</pre>
-        </div>`;
-      })
-      .join('')}</div>`;
-  } else if (chart.sections.length) {
-    body = `<div class="sheet timeline">${chart.sections
-      .map((s) => {
-        const bars = s.progression
-          .map((p) => {
-            const n = Math.max(1, Math.min(p.bars ?? 1, 32));
-            return Array(n).fill(renderSymbol(p.symbol)).join(' | ');
-          })
-          .join(' | ');
-        const rep = (s.repeats ?? 1) > 1 ? `  ×${s.repeats}` : '';
-        return `
-        <div class="pair">
-          <div class="section">${esc(s.label)}${rep}</div>
-          <pre class="chords">| ${esc(bars)} |</pre>
-        </div>`;
-      })
-      .join('')}</div>`;
-  } else {
-    body = `<p class="muted">This chart has no content — the lookup may have found no published progression.</p>`;
-  }
+  const body = lines
+    .map((l) => {
+      const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
+      if (!row && !l.lyric.trim() && !l.section) return '<div class="gap"></div>';
+      return `
+      <div class="pair">
+        ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
+        ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
+        ${l.lyric.trim() ? `<pre class="lyric">${esc(l.lyric)}</pre>` : ''}
+      </div>`;
+    })
+    .join('');
 
-  const sources = `
-    <section class="provenance screen-only">
-      <h2>Sources &amp; consensus</h2>
-      ${chart.consensus ? `<p class="consensus">${esc(chart.consensus)}</p>` : ''}
-      <ul class="sources">
-        ${chart.sources
-          .map(
-            (s) => `
-          <li>
-            ${agreementIcon(s.agreement)}
-            ${s.url ? `<a href="${esc(s.url)}" rel="noopener nofollow">${esc(s.name)}</a>` : esc(s.name)}
-            ${s.key ? `<span class="src-key">key: ${esc(s.key)}</span>` : ''}
-            ${s.detail ? `<span class="src-detail">${esc(s.detail)}</span>` : ''}
-          </li>`
-          )
-          .join('')}
-      </ul>
-      <p class="fine">Consensus chart generated ${esc(new Date(chart.generatedAt).toLocaleDateString())}. Chords are an interpretation; sources may transcribe the recording differently.</p>
-    </section>`;
+  main.innerHTML = `
+    <article class="chart">
+      ${toolbar}
+      <header class="masthead">
+        <h1>${esc(sheet.song)}</h1>
+        <p class="byline">${esc(sheet.artist)}</p>
+        ${meta ? `<p class="meta">${esc(meta)}</p>` : ''}
+      </header>
+      <div class="sheet">${body}</div>
+      <footer class="credit">
+        Chart from Ultimate Guitar${sheet.rating ? ` · ${sheet.rating.toFixed(1)}★ from ${sheet.votes?.toLocaleString()} votes` : ''}.
+        Chords are an interpretation; recordings vary.
+      </footer>
+    </article>`;
 
-  main.innerHTML = `<article class="chart">${toolbar}${masthead}${body}${sources}</article>`;
-
-  document.getElementById('tr-down')!.addEventListener('click', () => {
+  const on = (id: string, fn: () => void) =>
+    document.getElementById(id)?.addEventListener('click', fn);
+  on('tr-down', () => {
     semitones = Math.max(-11, semitones - 1);
-    renderChart();
+    drawSheet();
   });
-  document.getElementById('tr-up')!.addEventListener('click', () => {
+  on('tr-up', () => {
     semitones = Math.min(11, semitones + 1);
-    renderChart();
+    drawSheet();
   });
-  document.getElementById('tr-reset')!.addEventListener('click', () => {
+  on('tr-reset', () => {
     semitones = 0;
-    renderChart();
+    drawSheet();
   });
-  document.getElementById('mode-letters')!.addEventListener('click', () => {
+  on('m-let', () => {
     numbers = false;
-    renderChart();
+    drawSheet();
   });
-  document.getElementById('mode-numbers')!.addEventListener('click', () => {
-    if (chart!.key) {
+  on('m-num', () => {
+    if (sheet!.key) {
       numbers = true;
-      renderChart();
+      drawSheet();
     }
   });
-  document.getElementById('print-btn')!.addEventListener('click', () => window.print());
+  on('print', () => window.print());
 }
 
 // ---------------------------------------------------------------------------
-// Pages
+// Routing
 // ---------------------------------------------------------------------------
-function renderHome(): void {
-  const rows = [...index]
-    .sort((a, b) => a.title.localeCompare(b.title))
-    .map(
-      (e) => `
-      <a class="song-card" href="#/s/${esc(e.slug)}">
-        <span class="t">${esc(e.title)}</span>
-        <span class="a">${esc(e.artist)}</span>
-        <span class="k">${e.key ? `Key of ${esc(e.key)}` : ''}</span>
-      </a>`
-    )
-    .join('');
-  main.innerHTML = `
-    <section class="home">
-      <h1>Chord charts, by consensus</h1>
-      <p class="tag">Every chart here was built by comparing multiple published sources and keeping what they agree on — with the disagreements shown, not hidden.</p>
-      <div class="song-grid">${rows || '<p class="muted">The library is empty. See below for how songs get added.</p>'}</div>
-      <p class="add-hint">Missing a song? <a href="#/about">Here is how one gets added.</a></p>
-    </section>`;
-}
-
-function renderAbout(): void {
-  main.innerHTML = `
-    <section class="about">
-      <h1>Adding a song</h1>
-      <p>This site is fully static — there is no server to search chord sites on demand. New charts are researched offline and committed into the library:</p>
-      <ol>
-        <li><strong>From the search bar:</strong> search any song — suggestions beyond the library appear automatically. Picking one gives you a pre-filled request that kicks off the lookup on GitHub; the chart appears here a few minutes later.</li>
-        <li><strong>Local script:</strong> clone <a href="${REPO_URL}" rel="noopener">the repo</a> and run <code>npm run add-song -- "Title" "Artist"</code>. It uses the Claude CLI with web search to compare several published sources, writes the consensus chart JSON, and you push the commit.</li>
-        <li><strong>GitHub Actions:</strong> run the <em>Add song</em> workflow from the repo's Actions tab. The Actions paths require an <code>ANTHROPIC_API_KEY</code> repository secret.</li>
-      </ol>
-      <p>Either way the chart lands in <code>public/data/charts/</code>, the index updates, and the site redeploys automatically.</p>
-      <p><a href="#/">← Back to the library</a></p>
-    </section>`;
-}
-
-function renderRequest(title: string, artist: string): void {
-  const issueUrl =
-    `${REPO_URL}/issues/new?template=chart-request.yml` +
-    `&title=${encodeURIComponent(`Chart request: ${title} — ${artist}`)}` +
-    `&song-title=${encodeURIComponent(title)}` +
-    `&artist=${encodeURIComponent(artist)}`;
-  main.innerHTML = `
-    <section class="about request">
-      <h1>${esc(title)} <span class="muted">— ${esc(artist)}</span></h1>
-      <p>This song isn't in the library yet. The site is fully static, so charts are researched by a background worker that compares multiple published sources — it can't happen live in the browser.</p>
-      <p><a class="cta" href="${esc(issueUrl)}" rel="noopener">Request this chart on GitHub →</a></p>
-      <p class="muted">That opens a pre-filled request; submitting it kicks off the lookup automatically, and the chart appears here a few minutes later once it's committed. (The repository needs its <code>ANTHROPIC_API_KEY</code> secret configured for this to run.)</p>
-      <p>Have the repo cloned? The zero-setup path is the local script:</p>
-      <pre class="cmd">npm run add-song -- "${esc(title)}" "${esc(artist)}"</pre>
-      <p><a href="#/">← Back to the library</a></p>
-    </section>`;
-}
-
-async function renderSong(slug: string): Promise<void> {
-  main.innerHTML = `<p class="muted loading">Loading…</p>`;
-  try {
-    const res = await fetch(`data/charts/${encodeURIComponent(slug)}.json`);
-    if (!res.ok) throw new Error(`${res.status}`);
-    chart = (await res.json()) as Chart;
-    semitones = 0;
-    numbers = false;
-    document.title = `${chart.title} — ${chart.artist} · Chords`;
-    renderChart();
-  } catch {
-    main.innerHTML = `
-      <section class="about">
-        <h1>Chart not found</h1>
-        <p>No chart is stored for <code>${esc(slug)}</code>. <a href="#/about">How songs get added</a> · <a href="#/">library</a></p>
-      </section>`;
-  }
-}
-
 function route(): void {
   const h = location.hash || '#/';
-  const song = h.match(/^#\/s\/([\w-]+)/);
-  if (song) {
-    void renderSong(song[1]);
+  const m = h.match(/^#\/t\/(\d{1,12})/);
+  if (m) {
+    void renderSheet(m[1]);
     return;
   }
-  const req = h.match(/^#\/request\/([^/]+)\/([^/]+)/);
-  if (req) {
-    chart = null;
-    document.title = 'Request a chart · Chords';
-    renderRequest(decodeURIComponent(req[1]), decodeURIComponent(req[2]));
-    return;
-  }
-  chart = null;
-  document.title = 'Chords';
-  if (h.startsWith('#/about')) renderAbout();
-  else renderHome();
+  sheet = null;
+  document.title = 'chords';
+  renderHome();
+  if (hits.length) renderResults();
 }
 
 window.addEventListener('hashchange', route);
 
-// ---------------------------------------------------------------------------
-// Boot
-// ---------------------------------------------------------------------------
-async function boot(): Promise<void> {
-  try {
-    const res = await fetch('data/index.json');
-    const data = (await res.json()) as SongIndex;
-    index = data.songs ?? [];
-  } catch {
-    index = [];
+// Keep the search a keystroke away from anywhere.
+window.addEventListener('keydown', (ev) => {
+  if (ev.key === '/' && !/^(INPUT|TEXTAREA)$/.test((ev.target as HTMLElement).tagName)) {
+    ev.preventDefault();
+    if (location.hash && location.hash !== '#/') location.hash = '#/';
+    else (document.getElementById('q') as HTMLInputElement | null)?.focus();
   }
-  route();
-}
+});
 
-void boot();
+route();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      /* offline support is a bonus, never a requirement */
+    });
+  });
+}

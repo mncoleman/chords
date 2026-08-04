@@ -1,85 +1,63 @@
-# Chords
+# chords
 
-A fully static chord-chart library where every chart is built by **comparing multiple published sources** and keeping what they agree on — with the disagreements shown, not hidden.
+Search a song, get its chord chart, transpose it, read it in Nashville numbers, print it.
 
-**Live site:** https://mncoleman.github.io/chords/
+A private tool: the whole site sits behind Telegram sign-in.
 
-## Features
+## How it works
 
-- **Instant search** over the song library, entirely client-side — plus autosuggest for **any** song (iTunes Search API, one of the few music APIs that serves CORS). Picking a song that isn't in the library yet opens a pre-filled request that runs the lookup automatically.
-- **Lead-sheet rendering** — chords positioned above lyric lines; a section/bar timeline for instrumentals.
-- **Letters ↔ Nashville numbers** toggle (degree + accidental + the chord's own quality, e.g. `Am7` in G → `2m7`).
-- **Transpose** up/down by semitone with sane enharmonic spelling. Slash chords are handled correctly: both halves of `G/B` are transposed independently (tonal's `Chord.transpose` drops the bass otherwise).
-- **Print / save as PDF** — solid black on white, title/artist/key masthead, bold chords over lyrics, chord+lyric pairs kept together across page breaks. Use your browser's *Print → Save as PDF*.
-- **Provenance** — every chart shows which sources were consulted, where they agreed or differed, and a confidence level.
+Two things happen server-side, both as Cloudflare Pages Functions, because
+neither can happen in a browser:
 
-## Architecture
+- **`/api/search`** — Spotify autosuggest, so a half-typed or misspelled title
+  still finds the song. Spotify's client-credentials flow needs a secret, and a
+  secret cannot live in a bundle the browser downloads.
+- **`/api/ug`** — chord sheets from Ultimate Guitar's mobile API. It sends no
+  CORS headers and every request must be signed, so it is proxied.
 
-A static page cannot search chord sites from the browser (no server, no CORS). So the search happens **offline**, and the site only ever reads its own committed data:
+Everything after that is local to the page: parsing the sheet, transposing,
+converting to Nashville numbers, and printing.
 
-```
-scripts/add-song.mjs ──(claude CLI + web search)──▶ public/data/charts/<slug>.json
-                                                    public/data/index.json
-                 git push ──▶ GitHub Actions ──▶ GitHub Pages (pure static)
-```
+## Chord handling
 
-- `public/data/index.json` — the searchable song index.
-- `public/data/charts/<slug>.json` — one consensus chart per song (key, confidence, sources, consensus notes, chord-over-lyric lines).
-- The app (Vite + vanilla TypeScript + [@tonaljs/tonal](https://github.com/tonaljs/tonal)) fetches those files relative to its own origin. No API keys in the client, no cross-origin calls, no backend.
+Chord sheets are plain text with alignment carried by spaces. Rendering that
+verbatim is easy but dead — you cannot transpose it. So each chord line is
+parsed back into `(symbol, column)` pairs and re-laid out on render, which
+matters because transposition changes width: `C` becomes `C#m7`, and treating
+the line as a string would shear everything after it.
 
-## Adding a song
+Two details worth keeping:
 
-### From the site (requires a secret)
+- `tonal`'s `Chord.transpose` **drops the bass of a slash chord** — `G/B` up a
+  tone gives `A/B`. The halves are transposed separately.
+- Double accidentals from transposition are simplified, so `Db` up six
+  semitones prints `G`, not `Abb`.
 
-Search a song that isn't in the library and pick it — you land on a pre-filled GitHub issue. Submitting it triggers the `Chart request` workflow, which researches the chart, commits it, closes the issue, and the site redeploys. Like the manual workflow below, this needs the `ANTHROPIC_API_KEY` repository secret.
+## Auth
 
-### Local script (default, no secrets needed)
+Telegram OAuth (OIDC + PKCE) against the same bot mncoleman.com uses. The
+`id_token` is verified against Telegram's JWKS — signature, audience and expiry
+— and only the owner's Telegram `sub` is accepted. The session is an HS256 JWT
+in an HttpOnly cookie.
 
-Requires the [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) logged in on your machine:
-
-```bash
-npm install
-npm run add-song -- "Wonderwall" "Oasis"
-git add public/data && git commit -m "Add chart: Wonderwall" && git push
-```
-
-The script runs a headless Claude session with web search, compares several published chord sources, and writes the consensus chart JSON. Pushing to `main` redeploys the site automatically.
-
-### GitHub Actions (requires a secret)
-
-The **Add song** workflow (Actions tab → *Add song* → *Run workflow*) does the same lookup server-side and commits the result. It needs an `ANTHROPIC_API_KEY` repository secret (*Settings → Secrets and variables → Actions*) — a local subscription login does not transfer to CI. Until that secret is added, the workflow fails with a clear error; use the local script instead.
-
-## Development
+## Develop
 
 ```bash
 npm install
-npm run dev       # local dev server
-npm run build     # type-check + production build into dist/
-npm run preview   # serve the production build locally
+npm run dev
+npm run build
 ```
 
-Deployment is automatic: every push to `main` builds and publishes via GitHub Actions (`.github/workflows/deploy.yml`).
+Secrets, set in the Pages project (never committed):
+`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `TELEGRAM_BOT_ID`,
+`TELEGRAM_CLIENT_SECRET`, `JWT_SECRET`, `OWNER_SUB`.
 
-## Chart data format
+## Note
 
-See `src/types.ts`. The essentials:
+Chord sheets are fetched from Ultimate Guitar's undocumented mobile API and are
+their content, not ours. That is why this is access-controlled rather than
+public. Charts are one person's interpretation of a recording; sources disagree.
 
-```jsonc
-{
-  "title": "…", "artist": "…", "key": "G", "confidence": "high",
-  "mode": "lyrics",                    // or "timeline"
-  "consensus": "UG and e-chords agree; Chordify hears Cadd9 for C…",
-  "sources": [{ "name": "Ultimate Guitar", "url": "…", "agreement": "agrees" }],
-  "lines": [{ "section": "Verse 1", "text": "…lyric…", "chords": [{ "symbol": "Em7", "at": 0 }] }],
-  "sections": []                       // timeline mode: [{ label, repeats, progression: [{ symbol, bars }] }]
-}
-```
+## Licence
 
-## Caveats
-
-- Charts are AI-assisted consensus reconstructions of publicly published transcriptions — they can be wrong. The confidence badge and source list exist so you can judge for yourself.
-- Lyric excerpts are included solely to position chords for personal practice use.
-
-## License
-
-[MIT](LICENSE)
+MIT — see [LICENSE](LICENSE).
