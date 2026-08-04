@@ -131,6 +131,26 @@ a { color: inherit; text-decoration: none; }
 .seg button.on { background: var(--card); color: var(--fg); }
 .toolbar button.primary { border: 1px solid var(--line); color: var(--fg); }
 
+/* On a phone the controls wrapped onto three rows, so the sticky toolbar grew
+   tall enough to cover the chart and push transpose out of reach. Keep it to a
+   single row and let it scroll sideways instead. */
+@media (max-width: 640px) {
+  .toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 0.5rem;
+  }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .toolbar > * { flex: 0 0 auto; }
+  /* flex:1 in a scroll container would stretch forever and hide Print. */
+  .toolbar .spacer { display: none; }
+  /* The word "Key" is redundant next to the key itself, and it costs a lot. */
+  .ctl .lbl { display: none; }
+  .toolbar button { padding: 0.35rem 0.6rem; min-height: 2.1rem; }
+}
+
 .masthead { padding: 2rem 0 1.25rem; }
 .masthead h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2.1rem); letter-spacing: -0.02em; }
 .masthead .byline { margin: 0.2rem 0 0; color: var(--muted); }
