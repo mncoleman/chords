@@ -204,13 +204,15 @@ async function renderAdmin(): Promise<void> {
 
       <section class="panel">
         <h2>Add someone</h2>
-        <p class="muted small">Invite by @username. Telegram hides ordinary people from bot
-          lookups, so most of the time there is no preview — their name and picture arrive
-          with their first sign-in. Bots, channels, and anyone this bot has already met do
-          show up.</p>
+        <p class="muted small"><strong>Find</strong> previews an account — which Telegram only
+          allows for bots, channels, and people this bot has met. <strong>Set</strong> grants
+          access to exactly what you type, with no preview: a @username, or a number, which is
+          matched at sign-in against both their id and this app's own identifier for them.
+          If you have neither, have them sign in once and approve the request that appears here.</p>
         <form id="lookup-form" class="row" autocomplete="off">
-          <input id="lookup-q" placeholder="@username or 123456789" aria-label="Telegram username or id">
+          <input id="lookup-q" placeholder="@username or id" aria-label="Telegram username or id">
           <button type="submit">Find</button>
+          <button type="button" id="set-btn" title="Grant access to exactly what is typed">Set</button>
         </form>
         <div id="lookup-out"></div>
       </section>
@@ -240,7 +242,12 @@ async function renderAdmin(): Promise<void> {
               <h2>Invited, not signed in yet</h2>
               <ul class="people">
                 ${invites
-                  .map((p) => personRow(p, `<button class="danger" data-uninvite="${esc(p.username || '')}">Cancel</button>`))
+                  .map((p) =>
+                    personRow(
+                      { ...p, name: p.name || (p.username ? null : `id ${(p as { id?: string }).id}`) },
+                      `<button class="danger" data-unset="${esc(p.username || (p as { id?: string }).id || '')}">Cancel</button>`
+                    )
+                  )
                   .join('')}
               </ul>
             </section>`
@@ -286,6 +293,15 @@ async function renderAdmin(): Promise<void> {
 
   const form = document.getElementById('lookup-form') as HTMLFormElement;
   const out = document.getElementById('lookup-out') as HTMLElement;
+
+  // "Set" skips the preview and grants whatever was typed. A number is matched
+  // at sign-in against their subject and against any id in their token, so it
+  // works whichever kind of number you have.
+  document.getElementById('set-btn')?.addEventListener('click', () => {
+    const v = (document.getElementById('lookup-q') as HTMLInputElement).value.trim();
+    if (!v) return;
+    void adminPost({ action: 'set', value: v });
+  });
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const q = (document.getElementById('lookup-q') as HTMLInputElement).value.trim();
@@ -295,8 +311,10 @@ async function renderAdmin(): Promise<void> {
     if (r.status === 401) return signedOut();
     const found = await r.json();
     if (found.error) {
-      // A username cannot be previewed, but it can still be invited: the
-      // matching happens against the username in their sign-in token.
+      // A username cannot usually be previewed, but it can still be invited:
+      // the matching happens against the username in their sign-in token. A
+      // bare id cannot be invited at all — nothing in the sign-in token
+      // carries it, so there would be nothing to match against.
       out.innerHTML = `
         <p class="muted small">${esc(found.error)}</p>
         ${
@@ -305,11 +323,19 @@ async function renderAdmin(): Promise<void> {
                 { username: found.username },
                 `<button id="grant">Invite @${esc(found.username)}</button>`
               )}</ul>`
-            : ''
+            : `<p class="muted small">Ask them for their @username and invite that instead — it is
+               the only thing their sign-in can be matched on.</p>`
         }`;
       document
         .getElementById('grant')
         ?.addEventListener('click', () => void adminPost({ action: 'invite', username: found.username }));
+      return;
+    }
+    if (!found.username) {
+      out.innerHTML = `<ul class="people">${personRow(found, '')}</ul>
+        <p class="muted small">Found them, but that account has no @username. Nothing in a
+          Telegram sign-in identifies them, so they cannot be invited ahead of time — have
+          them sign in once and approve the request that appears here.</p>`;
       return;
     }
     out.innerHTML = `<ul class="people">${personRow(found, '<button id="grant">Grant access</button>')}</ul>`;
@@ -339,8 +365,8 @@ async function renderAdmin(): Promise<void> {
       if (confirm('Remove this person entirely?')) void adminPost({ action: 'remove', sub: b.dataset.remove });
     })
   );
-  main.querySelectorAll<HTMLElement>('[data-uninvite]').forEach((b) =>
-    b.addEventListener('click', () => void adminPost({ action: 'uninvite', username: b.dataset.uninvite }))
+  main.querySelectorAll<HTMLElement>('[data-unset]').forEach((b) =>
+    b.addEventListener('click', () => void adminPost({ action: 'unset', value: b.dataset.unset }))
   );
 }
 

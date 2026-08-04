@@ -138,10 +138,11 @@ export async function onRequestGet(ctx) {
     return json(await telegramLookup(ctx.env, clean));
   }
 
-  const [users, pending, invites] = await Promise.all([
+  const [users, pending, invites, idInvites] = await Promise.all([
     readAll(kv, 'user:'),
     readAll(kv, 'pending:'),
     readAll(kv, 'invite:'),
+    readAll(kv, 'idinvite:'),
   ]);
 
   // The owner's own Telegram profile. Their OIDC subject says nothing about
@@ -163,7 +164,10 @@ export async function onRequestGet(ctx) {
     ownerSub: String(ctx.env.OWNER_SUB || ''),
     users: users.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     pending: pending.sort((a, b) => (a.requestedAt || '').localeCompare(b.requestedAt || '')),
-    invites: invites.sort((a, b) => (a.username || '').localeCompare(b.username || '')),
+    invites: [
+      ...invites.sort((a, b) => (a.username || '').localeCompare(b.username || '')),
+      ...idInvites,
+    ],
   });
 }
 
@@ -199,6 +203,49 @@ export async function onRequestPost(ctx) {
     };
     await kv.put(`invite:${username}`, JSON.stringify(invite));
     return json({ ok: true, invite });
+  }
+
+  // Grant access to an identifier the admin already has, without a preview.
+  // A number is stored as an id-invite and matched at sign-in against the
+  // caller's subject AND against any numeric-looking claim in their token, so
+  // it works whether the number is their OIDC subject or their Telegram id.
+  if (body.action === 'set') {
+    const value = String(body.value || '').trim().replace(/^@/, '');
+    if (/^\d{4,32}$/.test(value)) {
+      if (value === String(ctx.env.OWNER_SUB)) return json({ error: 'That is the owner' }, 400);
+      await kv.put(
+        `idinvite:${value}`,
+        JSON.stringify({
+          id: value,
+          role,
+          name: typeof body.name === 'string' ? body.name.slice(0, 120) : null,
+          invitedAt: new Date().toISOString(),
+          invitedBy: String(gate.payload.sub),
+        })
+      );
+      return json({ ok: true, kind: 'id' });
+    }
+    if (/^[A-Za-z0-9_]{3,64}$/.test(value)) {
+      const username = value.toLowerCase();
+      await kv.put(
+        `invite:${username}`,
+        JSON.stringify({
+          username,
+          role,
+          invitedAt: new Date().toISOString(),
+          invitedBy: String(gate.payload.sub),
+        })
+      );
+      return json({ ok: true, kind: 'username' });
+    }
+    return json({ error: 'Enter a @username or a numeric id' }, 400);
+  }
+
+  if (body.action === 'unset') {
+    const value = String(body.value || '').trim().replace(/^@/, '');
+    if (!/^[A-Za-z0-9_]{3,64}$/.test(value)) return json({ error: 'Invalid identifier' }, 400);
+    await kv.delete(/^\d+$/.test(value) ? `idinvite:${value}` : `invite:${value.toLowerCase()}`);
+    return json({ ok: true });
   }
 
   if (body.action === 'uninvite') {

@@ -194,6 +194,38 @@ async function authorize(env, sub, username, firstName, claims = {}) {
     }
   }
 
+  // Or the admin granted a bare number. It may be this app's subject, or the
+  // person's Telegram id — which the admin can see but we cannot map. So try
+  // the subject, then every numeric-looking claim in the token. Standard JWT
+  // fields are excluded so a timestamp can never be mistaken for an identity.
+  const SKIP = new Set(['iat', 'exp', 'nbf', 'auth_time', 'aud', 'iss']);
+  const numeric = [String(sub)];
+  for (const [k, v] of Object.entries(claims)) {
+    if (SKIP.has(k)) continue;
+    const s = String(v ?? '');
+    if (/^\d{4,32}$/.test(s) && !numeric.includes(s)) numeric.push(s);
+  }
+  for (const candidate of numeric) {
+    const raw2 = await kv.get(`idinvite:${candidate}`);
+    if (!raw2) continue;
+    const invite = JSON.parse(raw2);
+    const user = {
+      sub: String(sub),
+      name: firstName || invite.name || null,
+      username: username || null,
+      photo: typeof claims.picture === 'string' ? claims.picture : null,
+      role: invite.role === 'admin' ? 'admin' : 'user',
+      status: 'active',
+      addedAt: invite.invitedAt || new Date().toISOString(),
+      addedBy: invite.invitedBy || null,
+      claimedAt: new Date().toISOString(),
+      matchedOn: candidate,
+    };
+    await kv.put(`user:${sub}`, JSON.stringify(user));
+    await kv.delete(`idinvite:${candidate}`);
+    return { authorized: true, role: user.role };
+  }
+
   // Otherwise file a request the admin can approve — better than a dead end
   // for someone who was never invited.
   const already = await kv.get(`pending:${sub}`);
@@ -205,6 +237,9 @@ async function authorize(env, sub, username, firstName, claims = {}) {
         name: firstName || null,
         username: username || null,
         photo: typeof claims.picture === 'string' ? claims.picture : null,
+        // Which fields Telegram actually sends is undocumented enough that it
+        // is worth recording — it decides what an admin can match on.
+        claimKeys: Object.keys(claims).join(','),
         requestedAt: new Date().toISOString(),
       })
     );
