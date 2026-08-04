@@ -131,24 +131,49 @@ a { color: inherit; text-decoration: none; }
 .seg button.on { background: var(--card); color: var(--fg); }
 .toolbar button.primary { border: 1px solid var(--line); color: var(--fg); }
 
-/* On a phone the controls wrapped onto three rows, so the sticky toolbar grew
-   tall enough to cover the chart and push transpose out of reach. Keep it to a
-   single row and let it scroll sideways instead. */
+/* Chord-over-lyric cells that WRAP. Hidden on wide screens and in print, where
+   the exact <pre> pair is better. See toCells() for why they exist. */
+.flow { display: none; }
+.cw { display: inline-block; vertical-align: top; }
+.cc {
+  display: block; white-space: pre;
+  color: var(--accent); font-weight: 600;
+  /* Reserve the row even when this cell has no chord, so lyrics stay level. */
+  min-height: 1.35em; padding-right: 0.45em;
+}
+/* Chordless cells are most cells — padding them would space every word out. */
+.cc:empty { padding-right: 0; }
+.ct { display: block; white-space: pre; }
+
+/* --- phones ------------------------------------------------------------
+   Wrapping put the controls on three rows, so the sticky bar covered the
+   chart and transpose sat out of reach. Short labels get everything onto one
+   row instead — scrolling it sideways just moved the problem, cutting off the
+   Letters/Numbers toggle. */
+.toolbar .narrow { display: none; }
+
 @media (max-width: 640px) {
   .toolbar {
     flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    gap: 0.5rem;
+    gap: 0.4rem;
+    /* Clear the Dynamic Island / status bar when installed to the home screen.
+       Needs viewport-fit=cover on the meta tag to be non-zero. */
+    padding-top: calc(0.7rem + env(safe-area-inset-top, 0px));
   }
-  .toolbar::-webkit-scrollbar { display: none; }
-  .toolbar > * { flex: 0 0 auto; }
-  /* flex:1 in a scroll container would stretch forever and hide Print. */
-  .toolbar .spacer { display: none; }
-  /* The word "Key" is redundant next to the key itself, and it costs a lot. */
+  .toolbar > * { flex: 0 0 auto; min-width: 0; }
+  .toolbar .spacer { flex: 1 1 auto; }
+  .toolbar .wide { display: none; }
+  .toolbar .narrow { display: inline; }
+  /* The word "Key" is redundant next to the key itself, and it costs width. */
   .ctl .lbl { display: none; }
-  .toolbar button { padding: 0.35rem 0.6rem; min-height: 2.1rem; }
+  .ctl { padding: 0.2rem 0.35rem; gap: 0.15rem; }
+  .ctl .shift { width: 1.6rem; font-size: 0.74rem; }
+  .toolbar button { padding: 0.3rem 0.45rem; min-height: 2.1rem; font-size: 0.82rem; }
+
+  /* Read it while playing: the chart must never scroll sideways. */
+  .fixed { display: none; }
+  .flow { display: block; line-height: 1.25; }
+  pre.chords, pre.lyric { overflow-x: hidden; }
 }
 
 .masthead { padding: 2rem 0 1.25rem; }
@@ -175,6 +200,10 @@ pre.lyric { color: var(--fg); }
 
 /* --------------------------------------------------------------- print ---- */
 @media print {
+  /* Print always uses the exact pair, even when printing from a phone, where
+     the screen rule above would otherwise have swapped them. */
+  .flow { display: none !important; }
+  .fixed { display: block !important; }
   /* Black on white, chrome gone, and a chord never separated from its line. */
   :root { --fg: #000; --muted: #000; --accent: #000; }
 

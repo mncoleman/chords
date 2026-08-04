@@ -4,8 +4,8 @@
 // chord sheets are NOT pre-cached (they come from a live API), but a sheet you
 // have opened is kept so a chart you are mid-song with survives losing signal.
 
-const SHELL = 'chords-shell-v2';
-const SHEETS = 'chords-sheets-v2';
+const SHELL = 'chords-shell-v3';
+const SHEETS = 'chords-sheets-v3';
 // Bounded, or a heavy user's device accumulates every sheet ever opened.
 const SHEET_LIMIT = 200;
 
@@ -63,23 +63,32 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
+  // An asset request answered with HTML is the SPA fallback, which Pages serves
+  // for an asset it does not have — during the seconds a new deploy is
+  // propagating, for instance. Caching that poisons the entry PERMANENTLY,
+  // because this path is cache-first and never revalidates: the site then loads
+  // with the stylesheet replaced by index.html until storage is cleared by hand.
+  // It happened. Never store one, and never trust one already stored.
+  const isFallbackHtml = (res) =>
+    e.request.destination !== 'document' &&
+    (res.headers.get('Content-Type') || '').includes('text/html');
+
   // Shell assets: cache first, since they change only on deploy. Any failure
   // resolves to a Response — never a rejected promise, which surfaced in the
   // console as "FetchEvent resulted in a network error response".
   e.respondWith(
     caches
       .match(e.request)
-      .then(
-        (hit) =>
-          hit ||
-          fetch(e.request).then((res) => {
-            if (res.ok && res.type === 'basic') {
-              const copy = res.clone();
-              caches.open(SHELL).then((c) => c.put(e.request, copy));
-            }
-            return res;
-          })
-      )
+      .then((hit) => {
+        if (hit && !isFallbackHtml(hit)) return hit;
+        return fetch(e.request).then((res) => {
+          if (res.ok && res.type === 'basic' && !isFallbackHtml(res)) {
+            const copy = res.clone();
+            caches.open(SHELL).then((c) => c.put(e.request, copy));
+          }
+          return res;
+        });
+      })
       .catch(() => new Response('', { status: 504 }))
   );
 });

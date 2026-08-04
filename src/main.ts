@@ -6,7 +6,7 @@ import {
   toNashville,
   transposeSymbol,
 } from './music';
-import { layoutChords, parseSheet, type SheetLine } from './ug';
+import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
 
 // Chord sheets come from Ultimate Guitar's mobile API, proxied through
 // /api/ug — UG sends no CORS headers, and the request has to be signed, so it
@@ -314,6 +314,70 @@ async function renderSheet(id: string): Promise<void> {
   }
 }
 
+/** One chord sitting above one run of lyric text. */
+interface Cell {
+  chord: string;
+  text: string;
+}
+
+/** Re-cut a chord line + its lyric into cells that can WRAP.
+ *
+ *  The <pre> pair is exact but rigid: on a phone it scrolls sideways, which
+ *  makes a chart unreadable while playing. Cells carry their own alignment, so
+ *  the line can break at a space and the chord still sits over its syllable.
+ *
+ *  The lyric is cut at each chord column — that keeps placement faithful — and
+ *  each piece is then cut again at spaces so a long run can still break. Only
+ *  the first piece of a run carries the chord. */
+function toCells(chords: ChordAt[], lyric: string): Cell[] {
+  const cols = [...chords].sort((a, b) => a.at - b.at);
+
+  // A line of chords with no lyric under it (an intro or turnaround).
+  if (!lyric.trim()) return cols.map((c) => ({ chord: renderSymbol(c.symbol), text: '' }));
+
+  const cells: Cell[] = [];
+  // Text before the first chord belongs to nobody.
+  let cursor = 0;
+  const push = (chord: string, text: string) => {
+    // Split on spaces, keeping them, so the row can break between words.
+    const parts = text.split(/(\s+)/).filter((p) => p !== '');
+    if (!parts.length) {
+      cells.push({ chord, text: '' });
+      return;
+    }
+    parts.forEach((p, i) => cells.push({ chord: i === 0 ? chord : '', text: p }));
+  };
+
+  if (cols.length && cols[0].at > 0) {
+    push('', lyric.slice(0, cols[0].at));
+    cursor = cols[0].at;
+  }
+
+  for (let i = 0; i < cols.length; i++) {
+    const start = Math.max(cursor, cols[i].at);
+    const end = i + 1 < cols.length ? Math.max(start, cols[i + 1].at) : lyric.length;
+    push(renderSymbol(cols[i].symbol), lyric.slice(start, end));
+    cursor = end;
+  }
+
+  if (!cols.length) push('', lyric);
+  else if (cursor < lyric.length) push('', lyric.slice(cursor));
+
+  return cells;
+}
+
+function renderFlow(cells: Cell[]): string {
+  // No whitespace between the spans: they are inline-block, so a newline in the
+  // source would render as a real gap in the lyric.
+  return cells
+    .map(
+      (c) =>
+        `<span class="cw"><span class="cc">${c.chord ? esc(c.chord) : ''}</span>` +
+        `<span class="ct">${esc(c.text)}</span></span>`
+    )
+    .join('');
+}
+
 function drawSheet(): void {
   if (!sheet) return;
   const key = displayedKey();
@@ -328,14 +392,14 @@ function drawSheet(): void {
         <button id="tr-down" aria-label="Transpose down">−</button>
         <span class="shift">${shift}</span>
         <button id="tr-up" aria-label="Transpose up">+</button>
-        <button id="tr-reset" ${semitones ? '' : 'disabled'}>reset</button>
+        <button id="tr-reset" ${semitones ? '' : 'disabled'} aria-label="Reset transpose"><span class="wide">reset</span><span class="narrow">↺</span></button>
       </div>
       <div class="ctl seg">
-        <button id="m-let" class="${numbers ? '' : 'on'}">Letters</button>
-        <button id="m-num" class="${numbers ? 'on' : ''}" ${sheet.key ? '' : 'disabled'}>Numbers</button>
+        <button id="m-let" class="${numbers ? '' : 'on'}" aria-label="Show chords as letters"><span class="wide">Letters</span><span class="narrow">ABC</span></button>
+        <button id="m-num" class="${numbers ? 'on' : ''}" ${sheet.key ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
       </div>
       <div class="spacer"></div>
-      <button id="print" class="primary">Print / PDF</button>
+      <button id="print" class="primary" aria-label="Print or save as PDF"><span class="wide">Print / PDF</span><span class="narrow">PDF</span></button>
     </div>`;
 
   const meta = [
@@ -352,11 +416,17 @@ function drawSheet(): void {
     .map((l) => {
       const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
       if (!row && !l.lyric.trim() && !l.section) return '<div class="gap"></div>';
+      // Two renderings of the same line: the exact <pre> pair for wide screens
+      // and for print, and a wrapping one for phones. CSS picks.
+      const flow = renderFlow(toCells(l.chords, l.lyric));
       return `
       <div class="pair">
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
-        ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
-        ${l.lyric.trim() ? `<pre class="lyric">${esc(l.lyric)}</pre>` : ''}
+        <div class="fixed">
+          ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
+          ${l.lyric.trim() ? `<pre class="lyric">${esc(l.lyric)}</pre>` : ''}
+        </div>
+        <div class="flow">${flow}</div>
       </div>`;
     })
     .join('');
