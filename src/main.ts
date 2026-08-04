@@ -204,9 +204,10 @@ async function renderAdmin(): Promise<void> {
 
       <section class="panel">
         <h2>Add someone</h2>
-        <p class="muted small">A numeric Telegram id shows their name and picture, if the bot
-          has met them. A @username cannot be previewed — Telegram only resolves those for
-          public channels — but it can still be invited, and fills in when they sign in.</p>
+        <p class="muted small">Invite by @username. Telegram hides ordinary people from bot
+          lookups, so most of the time there is no preview — their name and picture arrive
+          with their first sign-in. Bots, channels, and anyone this bot has already met do
+          show up.</p>
         <form id="lookup-form" class="row" autocomplete="off">
           <input id="lookup-q" placeholder="@username or 123456789" aria-label="Telegram username or id">
           <button type="submit">Find</button>

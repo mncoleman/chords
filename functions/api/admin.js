@@ -66,12 +66,17 @@ async function readAll(kv, prefix) {
   return out;
 }
 
-/** Look someone up on Telegram by numeric id.
+/** Look someone up on Telegram by @username or numeric id.
  *
- *  Usernames do NOT work here, and that is Telegram's rule, not an oversight:
- *  getChat resolves @names for public channels and groups, but never for a
- *  private person — tested against an account that had messaged the bot. A
- *  numeric id works if the bot has met them.
+ *  What actually resolves, measured against this bot rather than assumed:
+ *  bots (@BotFather), channels (@durov, @telegram) and public groups all come
+ *  back by name or by id, and so do service accounts the bot has never met
+ *  (777000). A HUMAN's @username does not — Telegram hides ordinary people
+ *  from bot username lookups, and their numeric id only resolves once the bot
+ *  has met them.
+ *
+ *  So a person is generally invited by username without a preview, and their
+ *  details arrive with their first sign-in.
  *
  *  The photo comes back as a data URI on purpose: the real file URL contains
  *  the bot token, so it must never reach the browser. */
@@ -90,8 +95,8 @@ async function telegramLookup(env, query) {
     return {
       username: isId ? null : query.replace(/^@/, '').toLowerCase(),
       error: isId
-        ? 'The bot has never met that id, so Telegram will not describe it.'
-        : 'Telegram will not resolve a person by @username — only a numeric id. You can still invite the username; their name and picture fill in when they sign in.',
+        ? 'Telegram will not describe that id. Bots and channels are public; a person only resolves once this bot has met them.'
+        : 'Telegram hides people from username lookups, so there is no preview. Invite the username anyway — their name and picture arrive with their first sign-in.',
     };
   }
 
