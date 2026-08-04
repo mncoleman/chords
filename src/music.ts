@@ -13,12 +13,18 @@ export function intervalForSemitones(semitones: number): string {
   return semitones < 0 && abs !== 0 ? `-${name}` : name;
 }
 
-/** Collapse double accidentals a transposition can produce (Db +6st = Abb -> G). */
+/** Names nobody writes. Cb IS B and Fb IS E, but only ever appear as artefacts
+ *  of transposition here — Bb up a semitone printed "Cb" across a whole chart. */
+const ODD_SPELLINGS = new Set(['Cb', 'Fb', 'B#', 'E#']);
+
+/** Collapse double accidentals a transposition can produce (Db +6st = Abb -> G),
+ *  and the single-accidental spellings that are technically valid but wrong to
+ *  read. */
 function tidyRoot(note: string): string {
   const m = note.match(ROOT_RE);
   if (!m) return note;
   const [, root, rest] = m;
-  if (root.length <= 2) return note;
+  if (root.length <= 2 && !ODD_SPELLINGS.has(root)) return note;
   const simple = Note.simplify(root);
   return simple ? simple + rest : note;
 }

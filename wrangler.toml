@@ -1,0 +1,10 @@
+name = "chords"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "dist"
+
+# Same user list as the mncoleman.com admin panel, so access granted there
+# applies here. Read-only in practice, apart from claiming an invitation on
+# first sign-in — which is exactly what the admin worker does.
+[[kv_namespaces]]
+binding = "ADMIN_USERS"
+id = "9dd2c3346dd84a148dea9fa2f4f825f4"

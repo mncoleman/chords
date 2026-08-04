@@ -31,14 +31,38 @@ export function isChordToken(tok: string): boolean {
   return CHORD_RE.test(tok);
 }
 
-/** A chord line is one whose visible tokens are all chords. Lyrics occasionally
- *  contain a bare "A" or "I", so require at least one token with an accidental,
- *  a quality or a slash — something no ordinary word has. */
+/** Decorations that appear on chord lines without being chords: bar lines,
+ *  repeat counts, and bracketed hints. Requiring every token to be a chord
+ *  demoted "| G | D |" and "G  D  x2" to lyrics, taking the whole line with it. */
+const DECORATION_RE = /^(\||\|\||:\||\|:|x\d+|\(\d+x\)|\(.*\)|-+|\/)$/i;
+
+/** Is this a line of chords rather than words?
+ *
+ *  Judged by majority rather than unanimity, because one stray token used to
+ *  demote an entire chord line to lyrics. Lyrics still have to clear a bar: a
+ *  line of ordinary words rarely parses as chords at all, and short lines like
+ *  "A" or "I am" are rejected unless something in them could only be a chord. */
 export function isChordLine(line: string): boolean {
   const toks = line.trim().split(/\s+/).filter(Boolean);
   if (!toks.length) return false;
-  if (!toks.every(isChordToken)) return false;
-  return toks.some((t) => /[#b/0-9]|maj|min|dim|aug|sus|m$/.test(t)) || toks.length >= 3;
+
+  const meaningful = toks.filter((t) => !DECORATION_RE.test(t));
+  if (!meaningful.length) return false;
+
+  const chords = meaningful.filter(isChordToken);
+  // Every meaningful token must still look like a chord; the relaxation is that
+  // decorations no longer count against the line.
+  if (chords.length !== meaningful.length) return false;
+
+  // Something unmistakably chordal — an accidental, a quality, a slash, a
+  // number — settles it however short the line is.
+  if (meaningful.some((t) => /[#b/0-9]|maj|min|dim|aug|sus|add|m$/.test(t))) return true;
+
+  // Otherwise it is bare triads. Two or more is a chord line ("C  G"); a single
+  // bare letter is too easily a lyric ("A", "I") unless it stands alone with
+  // wide spacing, which is how UG lays out a lone chord.
+  if (meaningful.length >= 2) return true;
+  return /^\s|\s{2,}/.test(line) && meaningful.length === 1;
 }
 
 /** Column positions of each chord in a chord line. */
@@ -47,7 +71,8 @@ export function parseChordLine(line: string): ChordAt[] {
   const re = /\S+/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(line))) {
-    if (isChordToken(m[0])) out.push({ symbol: m[0], at: m.index });
+    // Decorations keep their place visually but are not transposable symbols.
+    if (isChordToken(m[0]) && !DECORATION_RE.test(m[0])) out.push({ symbol: m[0], at: m.index });
   }
   return out;
 }

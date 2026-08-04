@@ -25,16 +25,20 @@ async function hmacKey(secret) {
   ]);
 }
 
-async function signJwt(payload, secret, ttlSeconds = 60 * 60 * 24 * 30) {
+/** Every token carries what it is FOR. Two purposes shared one secret and no
+ *  purpose claim, so the short-lived PKCE stash — handed to any anonymous
+ *  caller by /api/auth/login — verified as a session and walked straight past
+ *  the gate. A token is now only ever accepted for the job it was minted for. */
+async function signJwt(payload, secret, ttlSeconds = 60 * 60 * 24 * 30, typ = 'session') {
   const now = Math.floor(Date.now() / 1000);
-  const body = { ...payload, iat: now, exp: now + ttlSeconds };
+  const body = { ...payload, typ, iat: now, exp: now + ttlSeconds };
   const head = b64urlStr(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const data = `${head}.${b64urlStr(JSON.stringify(body))}`;
   const sig = await crypto.subtle.sign('HMAC', await hmacKey(secret), enc.encode(data));
   return `${data}.${b64url(sig)}`;
 }
 
-export async function verifyJwt(token, secret) {
+export async function verifyJwt(token, secret, expectedTyp = 'session') {
   const parts = (token || '').split('.');
   if (parts.length !== 3) return null;
   const data = `${parts[0]}.${parts[1]}`;
@@ -44,6 +48,8 @@ export async function verifyJwt(token, secret) {
   try {
     const payload = JSON.parse(fromB64url(parts[1]));
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    // A token minted for one purpose must never satisfy another.
+    if (payload.typ !== expectedTyp) return null;
     return payload;
   } catch {
     return null;
@@ -59,42 +65,136 @@ function cookie(request, name) {
   return null;
 }
 
-/** Telegram signs its id_token with RS256; fetch the JWKS and verify properly
- *  rather than trusting the payload. */
+/** Verify Telegram's id_token against its JWKS.
+ *
+ *  Telegram publishes FOUR keys with different algorithms — RS256 (RSA), ES256
+ *  (EC), EdDSA (OKP) and ES256K — and signs with whichever it likes. Importing
+ *  every key as RSA throws `DataError: Invalid JWK "kty" Parameter`, which is
+ *  what produced a bare Cloudflare 1101 on the callback.
+ *
+ *  The key is now chosen strictly by `kid` with NO fallback. Falling back to
+ *  keys[0] was also an algorithm-confusion hole: an attacker choosing the kid
+ *  could aim verification at a key of their choosing. Unknown kid = reject.
+ *  The header `alg` must also agree with the key's own `alg`. */
+const JWK_ALGOS = {
+  RS256: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+  ES256: { name: 'ECDSA', namedCurve: 'P-256', hash: { name: 'SHA-256' } },
+  EdDSA: { name: 'Ed25519' },
+};
+
 async function verifyTelegramIdToken(idToken, botId) {
-  const parts = idToken.split('.');
-  if (parts.length !== 3) return null;
+  const bad = (why) => ({ error: why });
+  const parts = (idToken || '').split('.');
+  if (parts.length !== 3) return bad('shape');
 
-  const header = JSON.parse(fromB64url(parts[0]));
+  let header;
+  try {
+    header = JSON.parse(fromB64url(parts[0]));
+  } catch {
+    return bad('header');
+  }
+  // Never accept an unsigned or attacker-named algorithm.
+  if (!header.alg || header.alg === 'none') return bad('alg_none');
+  if (!JWK_ALGOS[header.alg]) return bad(`alg_${header.alg}`);
+
   const jwks = await fetch('https://oauth.telegram.org/.well-known/jwks.json').then((r) => r.json());
-  const jwk = (jwks.keys || []).find((k) => k.kid === header.kid) || (jwks.keys || [])[0];
-  if (!jwk) return null;
+  const jwk = (jwks.keys || []).find((k) => k.kid === header.kid);
+  if (!jwk) return bad(`kid_${header.kid || 'absent'}`);
+  if (jwk.alg && jwk.alg !== header.alg) return bad('alg_mismatch');
 
-  const key = await crypto.subtle.importKey(
-    'jwk',
-    jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['verify']
-  );
+  const params = JWK_ALGOS[header.alg];
+  const importParams =
+    params.name === 'ECDSA'
+      ? { name: 'ECDSA', namedCurve: params.namedCurve }
+      : params.name === 'Ed25519'
+        ? { name: 'Ed25519' }
+        : { name: params.name, hash: params.hash };
+
+  let key;
+  try {
+    key = await crypto.subtle.importKey('jwk', jwk, importParams, false, ['verify']);
+  } catch (e) {
+    return bad(`import_${header.alg}`);
+  }
+
+  const verifyParams =
+    params.name === 'ECDSA' ? { name: 'ECDSA', hash: params.hash } : { name: params.name };
+
   const sig = Uint8Array.from(fromB64url(parts[2]), (c) => c.charCodeAt(0));
-  const ok = await crypto.subtle.verify(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    sig,
-    enc.encode(`${parts[0]}.${parts[1]}`)
-  );
-  if (!ok) return null;
+  const ok = await crypto.subtle.verify(verifyParams, key, sig, enc.encode(`${parts[0]}.${parts[1]}`));
+  if (!ok) return bad(`sig_${header.alg}`);
 
-  const payload = JSON.parse(fromB64url(parts[1]));
-  if (String(payload.aud) !== String(botId)) return null;
-  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+  let payload;
+  try {
+    payload = JSON.parse(fromB64url(parts[1]));
+  } catch {
+    return bad('payload');
+  }
+  // aud may be a string or an array, per the OIDC spec.
+  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!aud.map(String).includes(String(botId))) return bad('aud');
+  if (payload.iss && !/oauth\.telegram\.org/.test(String(payload.iss))) return bad('iss');
+  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return bad('expired');
   return payload;
 }
 
 const SESSION = 'chords_session';
 
+/** Authorisation reads the SAME KV namespace as the mncoleman.com admin panel,
+ *  so whoever is granted access there gets chords too — one user list, managed
+ *  in one place. Deliberately mirrors that worker's checkUserAuthorization,
+ *  including claiming an invitation on first sign-in.
+ *
+ *  If the binding is missing the answer is owner-only, never open: a
+ *  misconfiguration must not turn into an unlocked door. */
+async function authorize(env, sub, username, firstName) {
+  if (String(sub) === String(env.OWNER_SUB)) {
+    return { authorized: true, role: 'super_admin' };
+  }
+  const kv = env.ADMIN_USERS;
+  if (!kv) return { authorized: false, role: '' };
+
+  const readUser = async (name) => {
+    const raw = await kv.get(`user:${name}`);
+    return raw ? JSON.parse(raw) : null;
+  };
+
+  // Fast path: this Telegram account has signed in before.
+  const known = await kv.get(`sub:${sub}`);
+  if (known) {
+    const user = await readUser(known);
+    if (user && user.status === 'active') return { authorized: true, role: user.role };
+  }
+
+  // Otherwise an invitation may be waiting under their username.
+  if (username) {
+    const user = await readUser(username);
+    if (user && user.status === 'invited') {
+      user.sub = String(sub);
+      user.firstName = firstName || null;
+      user.status = 'active';
+      user.claimedAt = new Date().toISOString();
+      await kv.put(`user:${username}`, JSON.stringify(user));
+      await kv.put(`sub:${sub}`, username);
+      return { authorized: true, role: user.role };
+    }
+  }
+
+  return { authorized: false, role: '' };
+}
+
 export async function onRequestGet(ctx) {
+  try {
+    return await handle(ctx);
+  } catch (e) {
+    // A bare throw here surfaces as a Cloudflare 1101 with no explanation.
+    // Anything unexpected becomes a readable auth_error instead.
+    const detail = encodeURIComponent(String(e?.message || e).slice(0, 120));
+    return new Response(null, { status: 302, headers: { Location: `/?auth_error=server&detail=${detail}` } });
+  }
+}
+
+async function handle(ctx) {
   const { request, env } = ctx;
   const url = new URL(request.url);
   const step = url.pathname.replace(/^\/api\/auth\/?/, '').replace(/\/$/, '');
@@ -102,7 +202,9 @@ export async function onRequestGet(ctx) {
   if (step === 'me') {
     const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET);
     return Response.json(
-      payload ? { authed: true, name: payload.name ?? null } : { authed: false },
+      payload
+        ? { authed: true, name: payload.name ?? null, role: payload.role ?? null }
+        : { authed: false },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   }
@@ -123,7 +225,7 @@ export async function onRequestGet(ctx) {
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
     const challenge = b64url(await crypto.subtle.digest('SHA-256', enc.encode(verifier)));
     const state = crypto.randomUUID();
-    const stash = await signJwt({ verifier, state }, env.JWT_SECRET, 600);
+    const stash = await signJwt({ verifier, state }, env.JWT_SECRET, 600, 'pkce');
 
     const params = new URLSearchParams({
       client_id: env.TELEGRAM_BOT_ID,
@@ -152,7 +254,7 @@ export async function onRequestGet(ctx) {
     const state = url.searchParams.get('state');
     if (!code || !state) return fail('missing_params');
 
-    const stash = await verifyJwt(cookie(request, 'oauth_stash'), env.JWT_SECRET);
+    const stash = await verifyJwt(cookie(request, 'oauth_stash'), env.JWT_SECRET, 'pkce');
     if (!stash || stash.state !== state) return fail('bad_state');
 
     const tokenRes = await fetch('https://oauth.telegram.org/token', {
@@ -167,17 +269,45 @@ export async function onRequestGet(ctx) {
         code_verifier: stash.verifier,
       }),
     });
-    if (!tokenRes.ok) return fail('token_exchange');
+    if (!tokenRes.ok) {
+      const body = (await tokenRes.text()).slice(0, 80).replace(/[^\w .:-]/g, '');
+      return fail(`token_exchange_${tokenRes.status}_${encodeURIComponent(body)}`);
+    }
 
-    const { id_token: idToken } = await tokenRes.json();
+    const tokenData = await tokenRes.json();
+    const idToken = tokenData.id_token;
+    // "shape" told us the id_token was not a JWT but not why. Name the fields
+    // Telegram actually returned — that distinguishes "absent" from "renamed".
+    if (typeof idToken !== 'string' || idToken.split('.').length !== 3) {
+      // Telegram answers 200 with {"error": "..."} on an OAuth-level refusal.
+      // The code names the cause: invalid_client is a bad client_secret,
+      // invalid_grant a reused code or mismatched redirect_uri.
+      const why = String(tokenData.error || tokenData.error_description || 'absent')
+        .slice(0, 60)
+        .replace(/[^\w.-]/g, '_');
+      return fail(`oauth_${why}`);
+    }
     const claims = await verifyTelegramIdToken(idToken, env.TELEGRAM_BOT_ID);
-    if (!claims) return fail('bad_token');
+    if (!claims || claims.error) return fail(`bad_token_${claims?.error || 'unknown'}`);
 
-    // Only the owner. This is a private tool, not a public service.
-    if (String(claims.sub) !== String(env.OWNER_SUB)) return fail('unauthorized');
+    const username = (claims.username || claims.preferred_username || '').toLowerCase();
+    const auth = await authorize(env, String(claims.sub), username, claims.first_name);
+    if (!auth.authorized) {
+      // Report the subject we were given. Telegram may issue a PAIRWISE sub —
+      // a different identifier per OAuth client — so it need not match the
+      // user id any other bot sees. Not a secret: it is the caller's own id,
+      // returned only to the caller's own browser.
+      const seen = encodeURIComponent(String(claims.sub).replace(/[^\w-]/g, ''));
+      return fail(`unauthorized_sub_${seen}`);
+    }
 
     const session = await signJwt(
-      { sub: claims.sub, name: claims.first_name || claims.username || 'Matthew' },
+      {
+        sub: claims.sub,
+        name: claims.first_name || claims.username || 'Admin',
+        username,
+        role: auth.role,
+      },
       env.JWT_SECRET
     );
 

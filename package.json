@@ -3,12 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Static chord-chart library with multi-source consensus, Nashville numbers, and transposition. Hosted on GitHub Pages.",
+  "description": "Search a song, get its chord chart, transpose it, read it in Nashville numbers, print it.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "build:catalogue": "node scripts/build-catalogue.mjs"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@tonaljs/tonal": "^4.10.0"

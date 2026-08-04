@@ -4,8 +4,10 @@
 // chord sheets are NOT pre-cached (they come from a live API), but a sheet you
 // have opened is kept so a chart you are mid-song with survives losing signal.
 
-const SHELL = 'chords-shell-v1';
-const SHEETS = 'chords-sheets-v1';
+const SHELL = 'chords-shell-v2';
+const SHEETS = 'chords-sheets-v2';
+// Bounded, or a heavy user's device accumulates every sheet ever opened.
+const SHEET_LIMIT = 200;
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -33,7 +35,12 @@ self.addEventListener('fetch', (e) => {
         .then((res) => {
           if (res.ok) {
             const copy = res.clone();
-            caches.open(SHEETS).then((c) => c.put(e.request, copy));
+            caches.open(SHEETS).then(async (c) => {
+              await c.put(e.request, copy);
+              const keys = await c.keys();
+              // Oldest first; trim back to the cap.
+              for (const k of keys.slice(0, Math.max(0, keys.length - SHEET_LIMIT))) await c.delete(k);
+            });
           }
           return res;
         })
@@ -42,18 +49,37 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // Shell: cache first, since it changes only on deploy.
+  // Navigations must always hit the network: a cached shell would paper over
+  // the sign-in page and show a logged-out app that 401s on every call.
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).catch(
+        () =>
+          caches.match('./index.html').then(
+            (hit) => hit || new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } })
+          )
+      )
+    );
+    return;
+  }
+
+  // Shell assets: cache first, since they change only on deploy. Any failure
+  // resolves to a Response — never a rejected promise, which surfaced in the
+  // console as "FetchEvent resulted in a network error response".
   e.respondWith(
-    caches.match(e.request).then(
-      (hit) =>
-        hit ||
-        fetch(e.request).then((res) => {
-          if (res.ok && res.type === 'basic') {
-            const copy = res.clone();
-            caches.open(SHELL).then((c) => c.put(e.request, copy));
-          }
-          return res;
-        })
-    )
+    caches
+      .match(e.request)
+      .then(
+        (hit) =>
+          hit ||
+          fetch(e.request).then((res) => {
+            if (res.ok && res.type === 'basic') {
+              const copy = res.clone();
+              caches.open(SHELL).then((c) => c.put(e.request, copy));
+            }
+            return res;
+          })
+      )
+      .catch(() => new Response('', { status: 504 }))
   );
 });

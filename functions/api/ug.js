@@ -109,7 +109,7 @@ export async function onRequestGet({ request }) {
         },
         200,
         // A given tab revision is immutable; let the edge hold it.
-        'public, max-age=86400'
+        'private, max-age=86400'
       );
     }
 
@@ -124,7 +124,7 @@ export async function onRequestGet({ request }) {
 
     const data = await res.json();
     const tabs = data.tabs || data.data?.tabs || [];
-    return json({ results: rank(tabs).slice(0, 20) }, 200, 'public, max-age=3600');
+    return json({ results: rank(tabs).slice(0, 20) }, 200, 'private, max-age=3600');
   } catch (e) {
     return json({ error: e.message || 'Lookup failed' }, 500);
   }

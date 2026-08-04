@@ -58,6 +58,13 @@ let acIndex = -1;
 let acTimer: number | undefined;
 let acSeq = 0;
 
+/** The session expired mid-use. Reload so the gate serves the sign-in page,
+ *  rather than leaving a logged-out app that reports "Not signed in" as if it
+ *  were a search failure. */
+function signedOut(): void {
+  location.replace('/');
+}
+
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -110,6 +117,7 @@ async function suggest(q: string): Promise<void> {
   const seq = ++acSeq;
   try {
     const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    if (res.status === 401) return signedOut();
     const data = await res.json();
     if (seq !== acSeq) return; // a later keystroke already won
     acItems = data.tracks ?? [];
@@ -239,6 +247,7 @@ async function search(q: string): Promise<void> {
 
   try {
     const res = await fetch(`/api/ug?q=${encodeURIComponent(q)}`);
+    if (res.status === 401) return signedOut();
     const data = await res.json();
     if (seq !== searchSeq) return;
     if (data.error) throw new Error(data.error);
@@ -286,6 +295,7 @@ async function renderSheet(id: string): Promise<void> {
   main.innerHTML = `<p class="muted loading">Loading chart…</p>`;
   try {
     const res = await fetch(`/api/ug?id=${encodeURIComponent(id)}`);
+    if (res.status === 401) return signedOut();
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     sheet = data as Sheet;

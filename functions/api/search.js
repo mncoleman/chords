@@ -81,7 +81,7 @@ export async function onRequestGet({ request, env }) {
     }));
 
     // Suggestions for the same query are stable; let the edge absorb repeats.
-    return json({ tracks }, 200, 'public, max-age=3600');
+    return json({ tracks }, 200, 'private, max-age=3600');
   } catch (e) {
     return json({ error: e.message || 'Search failed' }, 500);
   }

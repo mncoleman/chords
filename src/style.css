@@ -171,7 +171,15 @@ pre.lyric { color: var(--fg); }
 
   .sheet { font-size: 10.5pt; line-height: 1.3; }
 
-  pre.chords, pre.lyric { color: #000 !important; white-space: pre-wrap; overflow: visible; }
+  /* Keep alignment: chords and lyrics are separate elements, so allowing them
+     to wrap independently slides every chord off its syllable. Long lines are
+     shrunk to fit instead of wrapped. */
+  pre.chords, pre.lyric {
+    color: #000 !important;
+    white-space: pre;
+    overflow: visible;
+    font-size: 9.5pt;
+  }
   pre.chords { font-weight: 700 !important; }
 
   .section {

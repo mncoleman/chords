@@ -11,7 +11,14 @@ const SESSION = 'chords_session';
 
 // The login route obviously cannot require a login. The icons and manifest are
 // public so the browser can render the install prompt and the sign-in page.
-const OPEN = [/^\/api\/auth(\/|$)/, /^\/manifest\.webmanifest$/, /^\/icon-\d+\.png$/, /^\/favicon/];
+// Anchored, every one of them. An unanchored /^\/favicon/ matched
+// /faviconXYZ and served the app shell past the gate.
+const OPEN = [
+  /^\/api\/auth(\/|$)/,
+  /^\/manifest\.webmanifest$/,
+  /^\/icon-\d+\.png$/,
+  /^\/favicon\.svg$/,
+];
 
 function cookie(request, name) {
   const raw = request.headers.get('Cookie') || '';
@@ -60,8 +67,10 @@ export async function onRequest(context) {
 
   if (OPEN.some((re) => re.test(url.pathname))) return next();
 
-  const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET);
-  if (payload) return next();
+  // Demand a session token that names a user. "Any valid JWT" was not enough:
+  // the PKCE stash is also a valid JWT, and it is handed to anyone who asks.
+  const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET, 'session');
+  if (payload && payload.sub) return next();
 
   // An unauthenticated API call should get a machine-readable 401, not HTML —
   // otherwise the app's fetch() parses a login page as JSON and reports
