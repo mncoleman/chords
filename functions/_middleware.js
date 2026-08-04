@@ -55,10 +55,12 @@ const LOGIN_PAGE = `<!doctype html>
   <script>
     const m={missing_params:'Login was interrupted. Try again.',bad_state:'That login expired. Try again.',
       token_exchange:'Telegram would not complete the sign-in.',bad_token:'Could not verify the Telegram response.',
-      unauthorized:'That Telegram account is not permitted.',
-      pending:'Your request has been sent. You will get in once it is approved.'};
+      unauthorized:'That Telegram account is not permitted.'};
     const p=new URLSearchParams(location.search).get('auth_error');
-    if(p) document.getElementById('e').textContent = m[p] || 'Sign-in failed.';
+    const d=p&&p.match(/^denied_(\\d+)$/);
+    if(d) document.getElementById('e').innerHTML =
+      'This account does not have access yet.<br>Send this code to the owner:<br><code>'+d[1]+'</code>';
+    else if(p) document.getElementById('e').textContent = m[p] || 'Sign-in failed.';
   </script>
 </body></html>`;
 

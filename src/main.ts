@@ -136,6 +136,7 @@ function renderHome(msg?: string): void {
 // ---------------------------------------------------------------------------
 interface Person {
   sub?: string;
+  id?: string;
   username?: string | null;
   name?: string | null;
   photo?: string | null;
@@ -165,34 +166,81 @@ function personRow(p: Person, actions: string): string {
     </li>`;
 }
 
+/** Grants made in this session that KV's list may not report back yet. */
+const justSet = new Map<string, Person>();
+/** Removals likewise: KV can keep listing a key it has already deleted. */
+const justGone = new Set<string>();
+/** The last server response, so a click can repaint without a round trip. */
+let adminData: {
+  me?: { sub?: string; name?: string | null; username?: string | null; profile?: Person | null };
+  users?: Person[];
+  invites?: Person[];
+} | null = null;
+
+/** Send an action that has ALREADY been drawn as done.
+ *
+ *  Every button repaints first and posts second. KV is eventually consistent,
+ *  so re-reading the list right after a write often returns the old one — the
+ *  UI then looked frozen, and the only way to see a change was to restart the
+ *  app. On failure the local guess is dropped and the truth is fetched back. */
 async function adminPost(body: Record<string, unknown>): Promise<void> {
-  const res = await fetch('/api/admin', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401) return signedOut();
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
-    return;
+  try {
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) return signedOut();
+    const data = await res.json();
+    if (data.error) {
+      alert(data.error);
+      justSet.clear();
+      justGone.clear();
+      void refreshAdmin();
+      return;
+    }
+  } catch {
+    alert('That did not reach the server. Check your connection.');
+    justSet.clear();
+    justGone.clear();
   }
-  void renderAdmin();
+  void refreshAdmin();
 }
 
-async function renderAdmin(): Promise<void> {
-  document.title = 'Users · chords';
+async function refreshAdmin(): Promise<void> {
   const res = await fetch('/api/admin');
   if (res.status === 401) return signedOut();
   if (res.status === 403) {
     main.innerHTML = `<section class="hero"><h1>Admins only</h1><p><a href="#/">← Back</a></p></section>`;
     return;
   }
-  const data = await res.json();
+  adminData = await res.json();
+  paintAdmin();
+}
 
-  const users: Person[] = data.users ?? [];
-  const pending: Person[] = data.pending ?? [];
-  const invites: Person[] = data.invites ?? [];
+async function renderAdmin(): Promise<void> {
+  document.title = 'Users · chords';
+  if (adminData) paintAdmin(); // instant on a revisit; the fetch corrects it
+  await refreshAdmin();
+}
+
+function paintAdmin(): void {
+  const data = adminData ?? {};
+  const keyOf = (p: Person) => p.username || p.id || p.sub || '';
+
+  const serverUsers: Person[] = data.users ?? [];
+  const serverInvites: Person[] = data.invites ?? [];
+
+  // Once the server reports what we guessed, stop guessing.
+  const known = new Set([...serverInvites, ...serverUsers].map(keyOf));
+  for (const k of [...justSet.keys()]) if (known.has(k)) justSet.delete(k);
+  for (const k of [...justGone]) if (!known.has(k)) justGone.delete(k);
+
+  const users = serverUsers.filter((p) => !justGone.has(keyOf(p)));
+  const invites: Person[] = [
+    ...serverInvites.filter((p) => !justGone.has(keyOf(p))),
+    ...justSet.values(),
+  ];
 
   main.innerHTML = `
     <article class="chart admin">
@@ -208,7 +256,8 @@ async function renderAdmin(): Promise<void> {
           allows for bots, channels, and people this bot has met. <strong>Set</strong> grants
           access to exactly what you type, with no preview: a @username, or a number, which is
           matched at sign-in against both their id and this app's own identifier for them.
-          If you have neither, have them sign in once and approve the request that appears here.</p>
+          If they have no username, have them tap sign-in once — they are shown a code to send
+          you, which you paste here.</p>
         <form id="lookup-form" class="row" autocomplete="off">
           <input id="lookup-q" placeholder="@username or id" aria-label="Telegram username or id">
           <button type="submit">Find</button>
@@ -216,25 +265,6 @@ async function renderAdmin(): Promise<void> {
         </form>
         <div id="lookup-out"></div>
       </section>
-
-      ${
-        pending.length
-          ? `<section class="panel">
-              <h2>Waiting for approval</h2>
-              <ul class="people">
-                ${pending
-                  .map((p) =>
-                    personRow(
-                      p,
-                      `<button data-approve="${esc(p.sub || '')}">Approve</button>
-                       <button class="danger" data-remove="${esc(p.sub || '')}">Dismiss</button>`
-                    )
-                  )
-                  .join('')}
-              </ul>
-            </section>`
-          : ''
-      }
 
       ${
         invites.length
@@ -298,8 +328,16 @@ async function renderAdmin(): Promise<void> {
   // at sign-in against their subject and against any id in their token, so it
   // works whichever kind of number you have.
   document.getElementById('set-btn')?.addEventListener('click', () => {
-    const v = (document.getElementById('lookup-q') as HTMLInputElement).value.trim();
+    const raw = (document.getElementById('lookup-q') as HTMLInputElement).value.trim();
+    const v = raw.replace(/^@/, '');
     if (!v) return;
+    // Show it immediately; the server call is what makes it true, but waiting
+    // on KV's read-after-write lag reads as a button that did nothing.
+    const key = /^\d{4,32}$/.test(v) ? v : v.toLowerCase();
+    justSet.set(key, /^\d+$/.test(key) ? { id: key } : { username: key });
+    justGone.delete(key);
+    (document.getElementById('lookup-q') as HTMLInputElement).value = '';
+    paintAdmin();
     void adminPost({ action: 'set', value: v });
   });
   form.addEventListener('submit', async (ev) => {
@@ -328,7 +366,11 @@ async function renderAdmin(): Promise<void> {
         }`;
       document
         .getElementById('grant')
-        ?.addEventListener('click', () => void adminPost({ action: 'invite', username: found.username }));
+        ?.addEventListener('click', () => {
+          justSet.set(found.username, { username: found.username });
+          paintAdmin();
+          void adminPost({ action: 'invite', username: found.username });
+        });
       return;
     }
     if (!found.username) {
@@ -344,6 +386,8 @@ async function renderAdmin(): Promise<void> {
         alert('That account has no @username, so an invitation cannot be matched when they sign in.');
         return;
       }
+      justSet.set(found.username, { username: found.username, name: found.name, photo: found.photo });
+      paintAdmin();
       void adminPost({
         action: 'invite',
         username: found.username,
@@ -354,19 +398,41 @@ async function renderAdmin(): Promise<void> {
     });
   });
 
+  /** Change our own copy of a user, repaint, then tell the server. */
+  const localStatus = (sub: string, status: string) => {
+    const u = (adminData?.users ?? []).find((p) => p.sub === sub);
+    if (u) u.status = status;
+    paintAdmin();
+  };
+
   main.querySelectorAll<HTMLElement>('[data-approve]').forEach((b) =>
-    b.addEventListener('click', () => void adminPost({ action: 'approve', sub: b.dataset.approve }))
+    b.addEventListener('click', () => {
+      localStatus(String(b.dataset.approve), 'active');
+      void adminPost({ action: 'approve', sub: b.dataset.approve });
+    })
   );
   main.querySelectorAll<HTMLElement>('[data-revoke]').forEach((b) =>
-    b.addEventListener('click', () => void adminPost({ action: 'revoke', sub: b.dataset.revoke }))
+    b.addEventListener('click', () => {
+      localStatus(String(b.dataset.revoke), 'revoked');
+      void adminPost({ action: 'revoke', sub: b.dataset.revoke });
+    })
   );
   main.querySelectorAll<HTMLElement>('[data-remove]').forEach((b) =>
     b.addEventListener('click', () => {
-      if (confirm('Remove this person entirely?')) void adminPost({ action: 'remove', sub: b.dataset.remove });
+      if (!confirm('Remove this person entirely?')) return;
+      justGone.add(String(b.dataset.remove));
+      paintAdmin();
+      void adminPost({ action: 'remove', sub: b.dataset.remove });
     })
   );
   main.querySelectorAll<HTMLElement>('[data-unset]').forEach((b) =>
-    b.addEventListener('click', () => void adminPost({ action: 'unset', value: b.dataset.unset }))
+    b.addEventListener('click', () => {
+      const v = String(b.dataset.unset);
+      justSet.delete(v);
+      justGone.add(v);
+      paintAdmin();
+      void adminPost({ action: 'unset', value: v });
+    })
   );
 }
 
@@ -705,17 +771,19 @@ function drawSheet(): void {
         <span class="lbl">Key</span>
         <strong class="key">${key ? esc(key) : '—'}</strong>
         <button id="tr-down" aria-label="Transpose down">−</button>
-        <span class="shift">${shift}</span>
+        <button id="tr-reset" class="shift" ${semitones ? '' : 'disabled'}
+                aria-label="Reset transpose" title="Back to the original key">${shift}</button>
         <button id="tr-up" aria-label="Transpose up">+</button>
-        <button id="tr-reset" ${semitones ? '' : 'disabled'} aria-label="Reset transpose"><span class="wide">reset</span><span class="narrow">↺</span></button>
       </div>
       <div class="ctl seg">
         <button id="m-let" class="${numbers ? '' : 'on'}" aria-label="Show chords as letters"><span class="wide">Letters</span><span class="narrow">ABC</span></button>
         <button id="m-num" class="${numbers ? 'on' : ''}" ${effectiveKey() ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
       </div>
-      <button id="cond" class="${condensed ? 'on' : ''}" aria-pressed="${condensed}" aria-label="Condense repeated sections" title="Chords once per section; later verses keep their words only"><span class="wide">${condensed ? 'Condensed' : 'Full chart'}</span><span class="narrow">${condensed ? 'Short' : 'Full'}</span></button>
+      <div class="ctl seg" role="group" aria-label="Chart length">
+        <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
+        <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
+      </div>
       <div class="spacer"></div>
-      <button id="print" class="primary" aria-label="Print or save as PDF"><span class="wide">Print / PDF</span><span class="narrow">PDF</span></button>
     </div>`;
 
   const meta = [
@@ -751,6 +819,7 @@ function drawSheet(): void {
     <article class="chart">
       ${toolbar}
       <header class="masthead">
+        <button id="print" class="primary screen-only" aria-label="Print or save as PDF">Print / PDF</button>
         <h1>${esc(sheet.song)}</h1>
         <p class="byline">${esc(sheet.artist)}</p>
         ${meta ? `<p class="meta">${esc(meta)}</p>` : ''}
@@ -786,8 +855,14 @@ function drawSheet(): void {
       drawSheet();
     }
   });
-  on('cond', () => {
-    condensed = !condensed;
+  on('c-full', () => {
+    if (!condensed) return;
+    condensed = false;
+    drawSheet();
+  });
+  on('c-short', () => {
+    if (condensed) return;
+    condensed = true;
     drawSheet();
   });
   on('print', () => window.print());

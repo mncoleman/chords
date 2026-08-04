@@ -226,25 +226,11 @@ async function authorize(env, sub, username, firstName, claims = {}) {
     return { authorized: true, role: user.role };
   }
 
-  // Otherwise file a request the admin can approve — better than a dead end
-  // for someone who was never invited.
-  const already = await kv.get(`pending:${sub}`);
-  if (!already) {
-    await kv.put(
-      `pending:${sub}`,
-      JSON.stringify({
-        sub: String(sub),
-        name: firstName || null,
-        username: username || null,
-        photo: typeof claims.picture === 'string' ? claims.picture : null,
-        // Which fields Telegram actually sends is undocumented enough that it
-        // is worth recording — it decides what an admin can match on.
-        claimKeys: Object.keys(claims).join(','),
-        requestedAt: new Date().toISOString(),
-      })
-    );
-  }
-
+  // Nothing is written for an unknown caller. Anyone on the internet can reach
+  // the sign-in button, so filing a request per attempt would be an unbounded
+  // write endpoint and an invitation to be spammed. They are simply refused,
+  // and shown their own identifier so they can pass it to the admin, who
+  // grants it with "Set".
   return { authorized: false, role: '' };
 }
 
@@ -368,8 +354,11 @@ async function handle(ctx) {
       // a different identifier per OAuth client — so it need not match the
       // user id any other bot sees. Not a secret: it is the caller's own id,
       // returned only to the caller's own browser.
-      // A request is now on file, so say so rather than showing a dead end.
-      return fail('pending');
+      // Show them their own subject. It is not a secret — it is this app's own
+      // identifier for the caller, returned only to the caller's own browser —
+      // and it is the one thing an admin can grant when they have no username.
+      const seen = encodeURIComponent(String(claims.sub).replace(/[^\w-]/g, ''));
+      return fail(`denied_${seen}`);
     }
 
     const session = await signJwt(

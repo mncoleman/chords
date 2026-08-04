@@ -121,7 +121,13 @@ a { color: inherit; text-decoration: none; }
 }
 .ctl .lbl { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .ctl .key { font-family: var(--mono); }
-.ctl .shift { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); width: 1.9rem; text-align: center; }
+/* The semitone readout doubles as the reset control — one less button on a row
+   that had no room for it. */
+.ctl .shift {
+  font-family: var(--mono); font-size: 0.78rem; color: var(--muted);
+  min-width: 2rem; text-align: center; padding: 0.25rem 0.15rem;
+}
+.ctl .shift:disabled { opacity: 1; }
 .toolbar button {
   background: transparent; border: 0; color: var(--muted); cursor: pointer;
   padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.85rem; font-family: inherit;
@@ -166,9 +172,20 @@ a { color: inherit; text-decoration: none; }
   .toolbar .narrow { display: inline; }
   /* The word "Key" is redundant next to the key itself, and it costs width. */
   .ctl .lbl { display: none; }
-  .ctl { padding: 0.2rem 0.3rem; gap: 0.1rem; }
-  .ctl .shift { width: 1.5rem; font-size: 0.74rem; }
-  .toolbar button { padding: 0.3rem 0.4rem; min-height: 2.4rem; font-size: 0.82rem; }
+  /* Wrapping is the fallback, not the plan: with Print moved to the masthead
+     and the key letter dropped, everything fits one row at 375. Below that it
+     wraps to two rather than being cut off, which is what scrolling did. */
+  .toolbar { gap: 0.3rem; flex-wrap: wrap; }
+  .ctl { padding: 0.15rem 0.25rem; gap: 0.05rem; }
+  .ctl .shift { min-width: 1.7rem; font-size: 0.74rem; padding: 0.25rem 0; }
+  /* The key is already named in the header line under the title. */
+  .ctl .key { display: none; }
+  .toolbar button { padding: 0.3rem 0.35rem; min-height: 2.4rem; font-size: 0.79rem; }
+  .seg button { padding: 0.3rem 0.3rem; }
+  .toolbar .back { padding: 0 0.2rem; }
+  #tr-down, #tr-up { min-width: 2.2rem; min-height: 2.4rem; }
+
+  .masthead #print { margin-bottom: 0.75rem; }
   /* − and + are hit mid-song, often without looking. Everything else on this
      row gives up width so these can reach a proper thumb-sized target. */
   #tr-down, #tr-up {
