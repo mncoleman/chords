@@ -55,11 +55,29 @@ const LOGIN_PAGE = `<!doctype html>
   <script>
     const m={missing_params:'Login was interrupted. Try again.',bad_state:'That login expired. Try again.',
       token_exchange:'Telegram would not complete the sign-in.',bad_token:'Could not verify the Telegram response.',
-      unauthorized:'That Telegram account is not permitted.'};
+      unauthorized:'That Telegram account is not permitted.',
+      pending:'Your request has been sent. You will get in once it is approved.'};
     const p=new URLSearchParams(location.search).get('auth_error');
     if(p) document.getElementById('e').textContent = m[p] || 'Sign-in failed.';
   </script>
 </body></html>`;
+
+/** Sessions last 30 days, so checking the list only at sign-in would make the
+ *  admin's "revoke" button do nothing for a month. One KV read per request buys
+ *  an immediate cut-off, and KV reads are edge-cached.
+ *
+ *  If the store is missing, fall back to owner-only rather than open. */
+async function stillAllowed(env, sub) {
+  if (String(sub) === String(env.OWNER_SUB)) return true;
+  if (!env.CHORDS_USERS) return false;
+  const raw = await env.CHORDS_USERS.get(`user:${sub}`);
+  if (!raw) return false;
+  try {
+    return JSON.parse(raw).status === 'active';
+  } catch {
+    return false;
+  }
+}
 
 export async function onRequest(context) {
   const { request, next, env } = context;
@@ -70,7 +88,7 @@ export async function onRequest(context) {
   // Demand a session token that names a user. "Any valid JWT" was not enough:
   // the PKCE stash is also a valid JWT, and it is handed to anyone who asks.
   const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET, 'session');
-  if (payload && payload.sub) return next();
+  if (payload && payload.sub && (await stillAllowed(env, payload.sub))) return next();
 
   // An unauthenticated API call should get a machine-readable 401, not HTML —
   // otherwise the app's fetch() parses a login page as JSON and reports

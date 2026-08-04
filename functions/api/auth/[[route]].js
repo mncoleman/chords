@@ -147,37 +147,67 @@ const SESSION = 'chords_session';
  *
  *  If the binding is missing the answer is owner-only, never open: a
  *  misconfiguration must not turn into an unlocked door. */
-async function authorize(env, sub, username, firstName) {
+async function authorize(env, sub, username, firstName, claims = {}) {
   if (String(sub) === String(env.OWNER_SUB)) {
-    return { authorized: true, role: 'super_admin' };
+    return { authorized: true, role: 'admin' };
   }
-  const kv = env.ADMIN_USERS;
+  const kv = env.CHORDS_USERS;
   if (!kv) return { authorized: false, role: '' };
 
-  const readUser = async (name) => {
-    const raw = await kv.get(`user:${name}`);
-    return raw ? JSON.parse(raw) : null;
-  };
-
-  // Fast path: this Telegram account has signed in before.
-  const known = await kv.get(`sub:${sub}`);
-  if (known) {
-    const user = await readUser(known);
-    if (user && user.status === 'active') return { authorized: true, role: user.role };
+  const raw = await kv.get(`user:${sub}`);
+  if (raw) {
+    const user = JSON.parse(raw);
+    if (user.status === 'active') {
+      // Cheap last-seen, useful when deciding who still needs access.
+      user.lastSeen = new Date().toISOString();
+      if (username) user.username = username;
+      if (firstName) user.name = firstName;
+      await kv.put(`user:${sub}`, JSON.stringify(user));
+      return { authorized: true, role: user.role || 'user' };
+    }
+    return { authorized: false, role: '' };
   }
 
-  // Otherwise an invitation may be waiting under their username.
+  // An invitation may be waiting under their Telegram username. This is the
+  // only way to grant access BEFORE someone has ever signed in: the subject in
+  // the token is specific to this app and unknowable in advance, but the
+  // username in the same token is the one the admin looked them up by.
   if (username) {
-    const user = await readUser(username);
-    if (user && user.status === 'invited') {
-      user.sub = String(sub);
-      user.firstName = firstName || null;
-      user.status = 'active';
-      user.claimedAt = new Date().toISOString();
-      await kv.put(`user:${username}`, JSON.stringify(user));
-      await kv.put(`sub:${sub}`, username);
+    const inviteRaw = await kv.get(`invite:${username}`);
+    if (inviteRaw) {
+      const invite = JSON.parse(inviteRaw);
+      const user = {
+        sub: String(sub),
+        name: firstName || invite.name || null,
+        username,
+        photo: invite.photo || null,
+        telegramId: invite.telegramId || null,
+        role: invite.role === 'admin' ? 'admin' : 'user',
+        status: 'active',
+        addedAt: invite.invitedAt || new Date().toISOString(),
+        addedBy: invite.invitedBy || null,
+        claimedAt: new Date().toISOString(),
+      };
+      await kv.put(`user:${sub}`, JSON.stringify(user));
+      await kv.delete(`invite:${username}`);
       return { authorized: true, role: user.role };
     }
+  }
+
+  // Otherwise file a request the admin can approve — better than a dead end
+  // for someone who was never invited.
+  const already = await kv.get(`pending:${sub}`);
+  if (!already) {
+    await kv.put(
+      `pending:${sub}`,
+      JSON.stringify({
+        sub: String(sub),
+        name: firstName || null,
+        username: username || null,
+        photo: typeof claims.picture === 'string' ? claims.picture : null,
+        requestedAt: new Date().toISOString(),
+      })
+    );
   }
 
   return { authorized: false, role: '' };
@@ -291,14 +321,14 @@ async function handle(ctx) {
     if (!claims || claims.error) return fail(`bad_token_${claims?.error || 'unknown'}`);
 
     const username = (claims.username || claims.preferred_username || '').toLowerCase();
-    const auth = await authorize(env, String(claims.sub), username, claims.first_name);
+    const auth = await authorize(env, String(claims.sub), username, claims.first_name, claims);
     if (!auth.authorized) {
       // Report the subject we were given. Telegram may issue a PAIRWISE sub —
       // a different identifier per OAuth client — so it need not match the
       // user id any other bot sees. Not a secret: it is the caller's own id,
       // returned only to the caller's own browser.
-      const seen = encodeURIComponent(String(claims.sub).replace(/[^\w-]/g, ''));
-      return fail(`unauthorized_sub_${seen}`);
+      // A request is now on file, so say so rather than showing a dead end.
+      return fail('pending');
     }
 
     const session = await signJwt(

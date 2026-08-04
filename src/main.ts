@@ -115,8 +115,232 @@ function renderHome(msg?: string): void {
       <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
       ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
       <div id="results" class="results"></div>
+      <p id="admin-link" class="muted small"></p>
     </section>`;
   wireSearch();
+  void (async () => {
+    try {
+      const me = await (await fetch('/api/auth/me')).json();
+      if (me.role === 'admin') {
+        const el = document.getElementById('admin-link');
+        if (el) el.innerHTML = '<a href="#/admin">Manage users</a>';
+      }
+    } catch {
+      /* the link is a convenience; the page works without it */
+    }
+  })();
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+interface Person {
+  sub?: string;
+  username?: string | null;
+  name?: string | null;
+  photo?: string | null;
+  role?: string;
+  status?: string;
+  lastSeen?: string;
+  requestedAt?: string;
+  invitedAt?: string;
+}
+
+function avatar(p: Person): string {
+  if (p.photo) return `<img class="av" src="${esc(p.photo)}" alt="">`;
+  const initial = (p.name || p.username || '?').trim().charAt(0).toUpperCase();
+  return `<span class="av av-blank">${esc(initial)}</span>`;
+}
+
+function personRow(p: Person, actions: string): string {
+  const sub = p.sub ? `<span class="mono">${esc(p.sub)}</span>` : '';
+  return `
+    <li>
+      ${avatar(p)}
+      <span class="who">
+        <strong>${esc(p.name || p.username || 'Unknown')}</strong>
+        <span class="muted">${p.username ? '@' + esc(p.username) : sub}</span>
+      </span>
+      <span class="acts">${actions}</span>
+    </li>`;
+}
+
+async function adminPost(body: Record<string, unknown>): Promise<void> {
+  const res = await fetch('/api/admin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) return signedOut();
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  void renderAdmin();
+}
+
+async function renderAdmin(): Promise<void> {
+  document.title = 'Users · chords';
+  const res = await fetch('/api/admin');
+  if (res.status === 401) return signedOut();
+  if (res.status === 403) {
+    main.innerHTML = `<section class="hero"><h1>Admins only</h1><p><a href="#/">← Back</a></p></section>`;
+    return;
+  }
+  const data = await res.json();
+
+  const users: Person[] = data.users ?? [];
+  const pending: Person[] = data.pending ?? [];
+  const invites: Person[] = data.invites ?? [];
+
+  main.innerHTML = `
+    <article class="chart admin">
+      <div class="toolbar screen-only">
+        <a class="back" href="#/" title="Back to search">←</a>
+        <strong>Users</strong>
+        <div class="spacer"></div>
+      </div>
+
+      <section class="panel">
+        <h2>Add someone</h2>
+        <p class="muted small">A numeric Telegram id shows their name and picture, if the bot
+          has met them. A @username cannot be previewed — Telegram only resolves those for
+          public channels — but it can still be invited, and fills in when they sign in.</p>
+        <form id="lookup-form" class="row" autocomplete="off">
+          <input id="lookup-q" placeholder="@username or 123456789" aria-label="Telegram username or id">
+          <button type="submit">Find</button>
+        </form>
+        <div id="lookup-out"></div>
+      </section>
+
+      ${
+        pending.length
+          ? `<section class="panel">
+              <h2>Waiting for approval</h2>
+              <ul class="people">
+                ${pending
+                  .map((p) =>
+                    personRow(
+                      p,
+                      `<button data-approve="${esc(p.sub || '')}">Approve</button>
+                       <button class="danger" data-remove="${esc(p.sub || '')}">Dismiss</button>`
+                    )
+                  )
+                  .join('')}
+              </ul>
+            </section>`
+          : ''
+      }
+
+      ${
+        invites.length
+          ? `<section class="panel">
+              <h2>Invited, not signed in yet</h2>
+              <ul class="people">
+                ${invites
+                  .map((p) => personRow(p, `<button class="danger" data-uninvite="${esc(p.username || '')}">Cancel</button>`))
+                  .join('')}
+              </ul>
+            </section>`
+          : ''
+      }
+
+      <section class="panel">
+        <h2>Has access</h2>
+        <ul class="people">
+          ${(() => {
+            const me = data.me ?? {};
+            const p: Person = me.profile ?? { name: me.name, username: me.username };
+            return `<li>
+              ${avatar(p)}
+              <span class="who">
+                <strong>${esc(p.name || 'You')} <span class="muted small">you</span></strong>
+                <span class="muted">${p.username ? '@' + esc(p.username) : ''}${
+                  (p as { telegramId?: string }).telegramId
+                    ? ` · id ${esc((p as { telegramId?: string }).telegramId!)}`
+                    : ''
+                }</span>
+                <span class="muted mono">${esc(String(me.sub ?? ''))}</span>
+              </span>
+              <span class="acts muted small">owner</span>
+            </li>`;
+          })()}
+          ${
+            users.length
+              ? users
+                  .map((p) =>
+                    personRow(
+                      p,
+                      `${p.status === 'active' ? `<button data-revoke="${esc(p.sub || '')}">Revoke</button>` : `<button data-approve="${esc(p.sub || '')}">Restore</button>`}
+                       <button class="danger" data-remove="${esc(p.sub || '')}">Remove</button>`
+                    )
+                  )
+                  .join('')
+              : '<li class="muted small">Nobody else yet.</li>'
+          }
+        </ul>
+      </section>
+    </article>`;
+
+  const form = document.getElementById('lookup-form') as HTMLFormElement;
+  const out = document.getElementById('lookup-out') as HTMLElement;
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const q = (document.getElementById('lookup-q') as HTMLInputElement).value.trim();
+    if (!q) return;
+    out.innerHTML = '<p class="muted small">Looking…</p>';
+    const r = await fetch(`/api/admin?lookup=${encodeURIComponent(q)}`);
+    if (r.status === 401) return signedOut();
+    const found = await r.json();
+    if (found.error) {
+      // A username cannot be previewed, but it can still be invited: the
+      // matching happens against the username in their sign-in token.
+      out.innerHTML = `
+        <p class="muted small">${esc(found.error)}</p>
+        ${
+          found.username
+            ? `<ul class="people">${personRow(
+                { username: found.username },
+                `<button id="grant">Invite @${esc(found.username)}</button>`
+              )}</ul>`
+            : ''
+        }`;
+      document
+        .getElementById('grant')
+        ?.addEventListener('click', () => void adminPost({ action: 'invite', username: found.username }));
+      return;
+    }
+    out.innerHTML = `<ul class="people">${personRow(found, '<button id="grant">Grant access</button>')}</ul>`;
+    document.getElementById('grant')?.addEventListener('click', () => {
+      if (!found.username) {
+        alert('That account has no @username, so an invitation cannot be matched when they sign in.');
+        return;
+      }
+      void adminPost({
+        action: 'invite',
+        username: found.username,
+        name: found.name,
+        photo: found.photo,
+        telegramId: found.telegramId,
+      });
+    });
+  });
+
+  main.querySelectorAll<HTMLElement>('[data-approve]').forEach((b) =>
+    b.addEventListener('click', () => void adminPost({ action: 'approve', sub: b.dataset.approve }))
+  );
+  main.querySelectorAll<HTMLElement>('[data-revoke]').forEach((b) =>
+    b.addEventListener('click', () => void adminPost({ action: 'revoke', sub: b.dataset.revoke }))
+  );
+  main.querySelectorAll<HTMLElement>('[data-remove]').forEach((b) =>
+    b.addEventListener('click', () => {
+      if (confirm('Remove this person entirely?')) void adminPost({ action: 'remove', sub: b.dataset.remove });
+    })
+  );
+  main.querySelectorAll<HTMLElement>('[data-uninvite]').forEach((b) =>
+    b.addEventListener('click', () => void adminPost({ action: 'uninvite', username: b.dataset.uninvite }))
+  );
 }
 
 /** Spotify typeahead. It exists to fix the spelling and save the typing — the
@@ -547,6 +771,10 @@ function drawSheet(): void {
 // ---------------------------------------------------------------------------
 function route(): void {
   const h = location.hash || '#/';
+  if (h.startsWith('#/admin')) {
+    void renderAdmin();
+    return;
+  }
   const m = h.match(/^#\/t\/(\d{1,12})/);
   if (m) {
     void renderSheet(m[1]);

@@ -2,9 +2,10 @@ name = "chords"
 compatibility_date = "2024-11-01"
 pages_build_output_dir = "dist"
 
-# Same user list as the mncoleman.com admin panel, so access granted there
-# applies here. Read-only in practice, apart from claiming an invitation on
-# first sign-in — which is exactly what the admin worker does.
+# This app keeps its own user list rather than borrowing the mncoleman.com
+# admin panel's. Telegram issues a PAIRWISE subject — a different id per OAuth
+# client — so a person approved there is unrecognisable here anyway; the two
+# lists could never have referred to the same people.
 [[kv_namespaces]]
-binding = "ADMIN_USERS"
-id = "9dd2c3346dd84a148dea9fa2f4f825f4"
+binding = "CHORDS_USERS"
+id = "d006d4e267ab4e2f85e4516cb2b6a15e"

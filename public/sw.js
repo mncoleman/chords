@@ -4,8 +4,8 @@
 // chord sheets are NOT pre-cached (they come from a live API), but a sheet you
 // have opened is kept so a chart you are mid-song with survives losing signal.
 
-const SHELL = 'chords-shell-v3';
-const SHEETS = 'chords-sheets-v3';
+const SHELL = 'chords-shell-v4';
+const SHEETS = 'chords-sheets-v4';
 // Bounded, or a heavy user's device accumulates every sheet ever opened.
 const SHEET_LIMIT = 200;
 
@@ -48,6 +48,12 @@ self.addEventListener('fetch', (e) => {
     );
     return;
   }
+
+  // Every other API call goes straight to the network. They fell through to
+  // the cache-first branch below, which served the FIRST response forever — a
+  // stale user list, stale search suggestions, and a sign-in state that could
+  // not change. Only chord sheets are worth caching, and they are handled above.
+  if (url.pathname.startsWith('/api/')) return;
 
   // Navigations must always hit the network: a cached shell would paper over
   // the sign-in page and show a logged-out app that 401s on every call.
