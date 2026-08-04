@@ -200,6 +200,16 @@ a { color: inherit; text-decoration: none; }
   pre.chords, pre.lyric { overflow-x: hidden; }
 }
 
+/* Moved out of the toolbar, this lost the toolbar's button styling and fell
+   back to the browser's default light chrome, which reads as broken on a dark
+   page. Same treatment as the controls above it. */
+.masthead #print {
+  background: transparent; color: var(--fg); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 0.5rem 0.9rem; font: inherit; font-size: 0.84rem;
+}
+.masthead #print:hover { background: var(--card); }
+
 .masthead { padding: 2rem 0 1.25rem; }
 .masthead h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2.1rem); letter-spacing: -0.02em; }
 .masthead .byline { margin: 0.2rem 0 0; color: var(--muted); }
