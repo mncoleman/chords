@@ -1,0 +1,83 @@
+name: Chart request
+
+# Issue-triggered chart lookup: opening a "chart-request" issue (the site's
+# "Request this chart" button pre-fills one) runs the multi-source search,
+# commits the chart, and closes the issue with a link to the live page.
+#
+# REQUIRES the ANTHROPIC_API_KEY repository secret; without it the workflow
+# comments on the issue explaining what's missing and leaves it open.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  lookup:
+    if: contains(github.event.issue.labels.*.name, 'chart-request')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Parse issue form
+        id: parse
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          # Issue-form bodies render as "### <Label>\n\n<value>\n\n".
+          title=$(printf '%s\n' "$ISSUE_BODY" | awk '/^### Song title/{getline; while($0==""){getline}; print; exit}')
+          artist=$(printf '%s\n' "$ISSUE_BODY" | awk '/^### Artist/{getline; while($0==""){getline}; print; exit}')
+          if [ -z "$title" ] || [ -z "$artist" ]; then
+            echo "::error::Could not parse song title/artist from the issue body."
+            exit 1
+          fi
+          {
+            echo "title=$title"
+            echo "artist=$artist"
+          } >> "$GITHUB_OUTPUT"
+      - name: Check secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          NUM: ${{ github.event.issue.number }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            gh issue comment "$NUM" --body "The \`ANTHROPIC_API_KEY\` repository secret is not configured, so the automatic lookup cannot run. A maintainer can add it under Settings → Secrets and variables → Actions, or add this chart locally with \`npm run add-song\`."
+            exit 1
+          fi
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Look up chart
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          USER: runner
+          TMPDIR: ${{ runner.temp }}
+          SONG_TITLE: ${{ steps.parse.outputs.title }}
+          SONG_ARTIST: ${{ steps.parse.outputs.artist }}
+        run: node scripts/add-song.mjs "$SONG_TITLE" "$SONG_ARTIST"
+      - name: Commit chart
+        env:
+          SONG_TITLE: ${{ steps.parse.outputs.title }}
+          SONG_ARTIST: ${{ steps.parse.outputs.artist }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data
+          git diff --cached --quiet && { echo "Nothing changed"; exit 0; }
+          git commit -m "Add chart: $SONG_TITLE — $SONG_ARTIST (requested in #${{ github.event.issue.number }})"
+          git push
+      - name: Close issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SONG_TITLE: ${{ steps.parse.outputs.title }}
+          SONG_ARTIST: ${{ steps.parse.outputs.artist }}
+        run: |
+          slug=$(node -e 'const s=(process.argv[1]+" "+process.argv[2]).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,""); console.log(s)' "$SONG_TITLE" "$SONG_ARTIST")
+          gh issue close ${{ github.event.issue.number }} --comment "Chart added — it will be live at https://mncoleman.github.io/chords/#/s/$slug once the Pages deploy finishes (a minute or two)."

@@ -2,7 +2,7 @@ import './style.css';
 import type { Chart, ChartLine, IndexEntry, SongIndex } from './types';
 import { intervalForSemitones, keyIsMinor, keyTonicOf, toNashville, transposeSymbol } from './music';
 
-const REPO_URL = 'https://github.com/mncoleman/chordconsensus';
+const REPO_URL = 'https://github.com/mncoleman/chords';
 
 const main = document.getElementById('main')!;
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
@@ -10,6 +10,16 @@ const searchResults = document.getElementById('search-results') as HTMLUListElem
 
 let index: IndexEntry[] = [];
 let highlighted = -1;
+
+/** Autosuggestions for songs NOT in the library, from the iTunes Search API
+ *  (one of the few music search APIs that serves CORS to any origin). */
+interface WebHit {
+  title: string;
+  artist: string;
+}
+let webHits: WebHit[] = [];
+let webTimer: number | undefined;
+let webSeq = 0;
 
 // ---------------------------------------------------------------------------
 // View state for the open chart
@@ -42,38 +52,97 @@ function matches(q: string): IndexEntry[] {
   });
 }
 
+async function fetchWebHits(q: string): Promise<void> {
+  const seq = ++webSeq;
+  try {
+    const res = await fetch(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=6`
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    if (seq !== webSeq) return; // a newer query superseded this one
+    const seen = new Set<string>();
+    webHits = (data.results || [])
+      .map((r: { trackName?: string; artistName?: string }) => ({
+        title: r.trackName || '',
+        artist: r.artistName || '',
+      }))
+      .filter((h: WebHit) => {
+        if (!h.title || !h.artist) return false;
+        const k = norm(`${h.title}|${h.artist}`);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        // Hide web suggestions the library already covers.
+        return !index.some(
+          (e) => norm(e.title) === norm(h.title) && norm(e.artist) === norm(h.artist)
+        );
+      })
+      .slice(0, 5);
+    renderSearchResults();
+  } catch {
+    /* suggestions are best-effort; the library search still works */
+  }
+}
+
 function renderSearchResults(): void {
   const q = searchInput.value;
-  const hits = matches(q).slice(0, 12);
-  if (document.activeElement !== searchInput || (!q.trim() && !hits.length)) {
+  const hits = q.trim() ? matches(q).slice(0, 8) : [];
+  if (document.activeElement !== searchInput || !q.trim()) {
     searchResults.hidden = true;
     return;
   }
-  if (!hits.length) {
-    searchResults.innerHTML = `<li class="no-hit">Not in the library yet — <a href="#/about">how to add a song</a></li>`;
-    searchResults.hidden = false;
-    return;
-  }
-  searchResults.innerHTML = hits
-    .map(
-      (e, i) => `
-      <li data-slug="${esc(e.slug)}" class="${i === highlighted ? 'hl' : ''}" role="option">
+  const rows: string[] = [];
+  const all: { kind: 'lib' | 'web'; idx: number }[] = [];
+  hits.forEach((e, i) => {
+    all.push({ kind: 'lib', idx: i });
+    rows.push(`
+      <li data-slug="${esc(e.slug)}" data-n="${all.length - 1}" class="${all.length - 1 === highlighted ? 'hl' : ''}" role="option">
         <span class="t">${esc(e.title)}</span>
         <span class="a">${esc(e.artist)}</span>
         <span class="k">${e.key ? esc(e.key) : ''}</span>
-      </li>`
-    )
-    .join('');
+      </li>`);
+  });
+  if (webHits.length) {
+    rows.push(`<li class="group-label">Not in the library yet — pick one to request it</li>`);
+    webHits.forEach((h, i) => {
+      all.push({ kind: 'web', idx: i });
+      rows.push(`
+        <li data-req="${esc(encodeURIComponent(h.title))}|${esc(encodeURIComponent(h.artist))}" data-n="${all.length - 1}" class="web ${all.length - 1 === highlighted ? 'hl' : ''}" role="option">
+          <span class="t">${esc(h.title)}</span>
+          <span class="a">${esc(h.artist)}</span>
+          <span class="k">request</span>
+        </li>`);
+    });
+  }
+  if (!rows.length) {
+    rows.push(`<li class="no-hit">Searching… — or see <a href="#/about">how songs get added</a></li>`);
+  }
+  searchResults.innerHTML = rows.join('');
   searchResults.hidden = false;
 }
 
 searchInput.addEventListener('input', () => {
   highlighted = -1;
+  webHits = [];
+  window.clearTimeout(webTimer);
+  const q = searchInput.value.trim();
+  if (q.length >= 2) {
+    webTimer = window.setTimeout(() => void fetchWebHits(q), 300);
+  }
   renderSearchResults();
 });
+function activate(li: HTMLLIElement): void {
+  if (li.dataset.slug) {
+    go(`#/s/${li.dataset.slug}`);
+  } else if (li.dataset.req) {
+    const [t, a] = li.dataset.req.split('|');
+    go(`#/request/${t}/${a}`);
+  }
+}
+
 searchInput.addEventListener('focus', renderSearchResults);
 searchInput.addEventListener('keydown', (ev) => {
-  const items = searchResults.querySelectorAll<HTMLLIElement>('li[data-slug]');
+  const items = searchResults.querySelectorAll<HTMLLIElement>('li[data-n]');
   if (ev.key === 'ArrowDown') {
     highlighted = Math.min(highlighted + 1, items.length - 1);
     renderSearchResults();
@@ -84,15 +153,15 @@ searchInput.addEventListener('keydown', (ev) => {
     ev.preventDefault();
   } else if (ev.key === 'Enter') {
     const pick = highlighted >= 0 ? items[highlighted] : items[0];
-    if (pick) go(`#/s/${pick.dataset.slug}`);
+    if (pick) activate(pick);
   } else if (ev.key === 'Escape') {
     searchResults.hidden = true;
     searchInput.blur();
   }
 });
 searchResults.addEventListener('mousedown', (ev) => {
-  const li = (ev.target as HTMLElement).closest<HTMLLIElement>('li[data-slug]');
-  if (li) go(`#/s/${li.dataset.slug}`);
+  const li = (ev.target as HTMLElement).closest<HTMLLIElement>('li[data-n]');
+  if (li) activate(li);
 });
 document.addEventListener('click', (ev) => {
   if (!(ev.target as HTMLElement).closest('.search')) searchResults.hidden = true;
@@ -298,10 +367,29 @@ function renderAbout(): void {
       <h1>Adding a song</h1>
       <p>This site is fully static — there is no server to search chord sites on demand. New charts are researched offline and committed into the library:</p>
       <ol>
-        <li><strong>Local script (default):</strong> clone <a href="${REPO_URL}" rel="noopener">the repo</a> and run <code>npm run add-song -- "Title" "Artist"</code>. It uses the Claude CLI with web search to compare several published sources, writes the consensus chart JSON, and you push the commit.</li>
-        <li><strong>GitHub Actions:</strong> run the <em>Add song</em> workflow from the repo's Actions tab with a title and artist. Requires an <code>ANTHROPIC_API_KEY</code> repository secret.</li>
+        <li><strong>From the search bar:</strong> search any song — suggestions beyond the library appear automatically. Picking one gives you a pre-filled request that kicks off the lookup on GitHub; the chart appears here a few minutes later.</li>
+        <li><strong>Local script:</strong> clone <a href="${REPO_URL}" rel="noopener">the repo</a> and run <code>npm run add-song -- "Title" "Artist"</code>. It uses the Claude CLI with web search to compare several published sources, writes the consensus chart JSON, and you push the commit.</li>
+        <li><strong>GitHub Actions:</strong> run the <em>Add song</em> workflow from the repo's Actions tab. The Actions paths require an <code>ANTHROPIC_API_KEY</code> repository secret.</li>
       </ol>
       <p>Either way the chart lands in <code>public/data/charts/</code>, the index updates, and the site redeploys automatically.</p>
+      <p><a href="#/">← Back to the library</a></p>
+    </section>`;
+}
+
+function renderRequest(title: string, artist: string): void {
+  const issueUrl =
+    `${REPO_URL}/issues/new?template=chart-request.yml` +
+    `&title=${encodeURIComponent(`Chart request: ${title} — ${artist}`)}` +
+    `&song-title=${encodeURIComponent(title)}` +
+    `&artist=${encodeURIComponent(artist)}`;
+  main.innerHTML = `
+    <section class="about request">
+      <h1>${esc(title)} <span class="muted">— ${esc(artist)}</span></h1>
+      <p>This song isn't in the library yet. The site is fully static, so charts are researched by a background worker that compares multiple published sources — it can't happen live in the browser.</p>
+      <p><a class="cta" href="${esc(issueUrl)}" rel="noopener">Request this chart on GitHub →</a></p>
+      <p class="muted">That opens a pre-filled request; submitting it kicks off the lookup automatically, and the chart appears here a few minutes later once it's committed. (The repository needs its <code>ANTHROPIC_API_KEY</code> secret configured for this to run.)</p>
+      <p>Have the repo cloned? The zero-setup path is the local script:</p>
+      <pre class="cmd">npm run add-song -- "${esc(title)}" "${esc(artist)}"</pre>
       <p><a href="#/">← Back to the library</a></p>
     </section>`;
 }
@@ -314,7 +402,7 @@ async function renderSong(slug: string): Promise<void> {
     chart = (await res.json()) as Chart;
     semitones = 0;
     numbers = false;
-    document.title = `${chart.title} — ${chart.artist} · ChordConsensus`;
+    document.title = `${chart.title} — ${chart.artist} · Chords`;
     renderChart();
   } catch {
     main.innerHTML = `
@@ -332,8 +420,15 @@ function route(): void {
     void renderSong(song[1]);
     return;
   }
+  const req = h.match(/^#\/request\/([^/]+)\/([^/]+)/);
+  if (req) {
+    chart = null;
+    document.title = 'Request a chart · Chords';
+    renderRequest(decodeURIComponent(req[1]), decodeURIComponent(req[2]));
+    return;
+  }
   chart = null;
-  document.title = 'ChordConsensus';
+  document.title = 'Chords';
   if (h.startsWith('#/about')) renderAbout();
   else renderHome();
 }

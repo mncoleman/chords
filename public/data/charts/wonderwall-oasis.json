@@ -1,0 +1,397 @@
+{
+  "slug": "wonderwall-oasis",
+  "title": "Wonderwall",
+  "artist": "Oasis",
+  "key": "F#m",
+  "confidence": "high",
+  "mode": "timeline",
+  "consensus": "Songsterr and National Guitar Academy agree on the same progression, and the Ultimate Guitar and Chordify listings match it as well; all published charts use capo 2 with the shapes Em7-G-Dsus4-A7sus4 (verse) and Cadd9-Dsus4-Em7 / Cadd9-Em7-G (pre-chorus and chorus), which is transposed here to concert pitch (up a whole step, so F#m7-A-Esus4-B7sus4 etc.). Sources differ only in labeling and chord simplification: e-chords and some UG versions reduce the shapes to plain Em/G/D/A and Songsterr labels the pre-chorus a 'bridge', while National Guitar Academy notes the song hovers between E minor and G major shape-wise (F# minor / A major at concert pitch). Timeline mode is used because the song's lyrics are under copyright and are not reproduced here; the progression itself is well attested and section repeat counts are approximate.",
+  "sources": [
+    {
+      "name": "Songsterr",
+      "url": "https://www.songsterr.com/a/wsa/oasis-wonderwall-chords-s2",
+      "key": "Em7/G shapes, capo 2",
+      "agreement": "agrees",
+      "detail": "Full section-by-section progression incl. Dsus4/F# passing chord; capo 2, standard tuning."
+    },
+    {
+      "name": "National Guitar Academy",
+      "url": "https://nationalguitaracademy.com/songs/wonderwall-chords/",
+      "key": "Em/G shapes",
+      "agreement": "agrees",
+      "detail": "Verse Em-G-D-A7sus4; pre-chorus C-D-Em with the C-D-G-D-Em-D-A7sus4 turnaround. Notes the song meanders between E minor and G major (shape-wise)."
+    },
+    {
+      "name": "Ultimate Guitar (multiple versions)",
+      "url": "https://tabs.ultimate-guitar.com/tab/oasis/wonderwall-chords-27596",
+      "key": "F#m (some versions written capo 2 in Em)",
+      "agreement": "agrees",
+      "detail": "Top-rated versions give Em7-G-Dsus4-A7sus4 with capo 2; at least one version is written out at concert pitch as F#m7-A-Esus4-B7sus4."
+    },
+    {
+      "name": "Chordify",
+      "url": "https://chordify.net/chords/oasis-songs/wonderwall",
+      "agreement": "partial",
+      "detail": "Machine-detected chords aligned to the recording; same harmonic content but simplified voicings (no sus/add extensions)."
+    },
+    {
+      "name": "e-chords",
+      "url": "https://www.e-chords.com/chords/oasis/wonderwall",
+      "key": "Em (capo 2)",
+      "agreement": "partial",
+      "detail": "Simplified to Em-G-D-A shapes without the sus4/add9 extensions the other sources specify."
+    }
+  ],
+  "lines": [],
+  "sections": [
+    {
+      "label": "Intro",
+      "repeats": 2,
+      "progression": [
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Verse 1",
+      "repeats": 4,
+      "progression": [
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Pre-Chorus 1",
+      "progression": [
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "Esus4/G#"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "B7sus4",
+          "bars": 2
+        }
+      ]
+    },
+    {
+      "label": "Chorus 1",
+      "progression": [
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Verse 2",
+      "repeats": 4,
+      "progression": [
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Pre-Chorus 2",
+      "progression": [
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "Esus4/G#"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "B7sus4",
+          "bars": 2
+        }
+      ]
+    },
+    {
+      "label": "Chorus 2",
+      "progression": [
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Instrumental / Verse riff",
+      "repeats": 2,
+      "progression": [
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Final Chorus",
+      "repeats": 2,
+      "progression": [
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4",
+          "bars": 2
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Esus4"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "B7sus4"
+        }
+      ]
+    },
+    {
+      "label": "Outro",
+      "repeats": 2,
+      "progression": [
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "Dadd9"
+        },
+        {
+          "symbol": "F#m7"
+        },
+        {
+          "symbol": "A",
+          "bars": 2
+        }
+      ]
+    }
+  ],
+  "generatedAt": "2026-08-04T00:03:54.879Z"
+}

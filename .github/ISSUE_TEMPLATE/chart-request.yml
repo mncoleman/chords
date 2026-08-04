@@ -1,0 +1,23 @@
+name: Chart request
+description: Request a chord chart. Submitting runs the multi-source lookup automatically and commits the chart to the site.
+title: "Chart request: "
+labels: [chart-request]
+body:
+  - type: input
+    id: song-title
+    attributes:
+      label: Song title
+    validations:
+      required: true
+  - type: input
+    id: artist
+    attributes:
+      label: Artist
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        The lookup runs in GitHub Actions and usually takes a few minutes. The resulting
+        chart is committed and the site redeploys; this issue is closed automatically with
+        a link. Requires the repository's `ANTHROPIC_API_KEY` secret to be configured.

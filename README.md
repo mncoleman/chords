@@ -1,12 +1,12 @@
-# ChordConsensus
+# Chords
 
 A fully static chord-chart library where every chart is built by **comparing multiple published sources** and keeping what they agree on — with the disagreements shown, not hidden.
 
-**Live site:** https://mncoleman.github.io/chordconsensus/
+**Live site:** https://mncoleman.github.io/chords/
 
 ## Features
 
-- **Instant search** over the song library, entirely client-side.
+- **Instant search** over the song library, entirely client-side — plus autosuggest for **any** song (iTunes Search API, one of the few music APIs that serves CORS). Picking a song that isn't in the library yet opens a pre-filled request that runs the lookup automatically.
 - **Lead-sheet rendering** — chords positioned above lyric lines; a section/bar timeline for instrumentals.
 - **Letters ↔ Nashville numbers** toggle (degree + accidental + the chord's own quality, e.g. `Am7` in G → `2m7`).
 - **Transpose** up/down by semitone with sane enharmonic spelling. Slash chords are handled correctly: both halves of `G/B` are transposed independently (tonal's `Chord.transpose` drops the bass otherwise).
@@ -28,6 +28,10 @@ scripts/add-song.mjs ──(claude CLI + web search)──▶ public/data/charts
 - The app (Vite + vanilla TypeScript + [@tonaljs/tonal](https://github.com/tonaljs/tonal)) fetches those files relative to its own origin. No API keys in the client, no cross-origin calls, no backend.
 
 ## Adding a song
+
+### From the site (requires a secret)
+
+Search a song that isn't in the library and pick it — you land on a pre-filled GitHub issue. Submitting it triggers the `Chart request` workflow, which researches the chart, commits it, closes the issue, and the site redeploys. Like the manual workflow below, this needs the `ANTHROPIC_API_KEY` repository secret.
 
 ### Local script (default, no secrets needed)
 

@@ -70,7 +70,7 @@ const prompt = [
   '  ],',
   '  "mode": "lyrics" | "timeline",',
   '  "lines": [',
-  '    { "section": "Verse 1", "text": "<lyric line>", "chords": [ { "symbol": "G/B", "at": <char offset> } ] }',
+  '    { "section": "Verse 1", "text": "<short lyric cue, first 3-5 words…>", "chords": [ { "symbol": "G/B", "at": <char offset> } ] }',
   '  ],',
   '  "sections": [',
   '    { "label": "Intro", "repeats": 2, "progression": [ { "symbol": "Cm", "bars": 1 } ] }',
@@ -78,8 +78,15 @@ const prompt = [
   '}',
   '',
   'Rules:',
-  '- Prefer "lyrics" mode: lyric lines in song order with chords above them. Put "section"',
-  '  only on the FIRST line of each section (Intro / Verse 1 / Chorus / Bridge / Outro).',
+  '- ALWAYS fill "sections": the complete song structure in order (Intro / Verse 1 /',
+  '  Chorus / Bridge / Outro), each with its chord progression and bar counts. This is',
+  '  the required core of the chart.',
+  '- Additionally use "lyrics" mode with "lines" when you can: for each line give a SHORT',
+  '  lyric CUE of the first 3-5 words followed by an ellipsis (e.g. "When I find myself…"),',
+  '  NOT the full lyric text — full song lyrics must not be reproduced. Chords go above',
+  '  the cue. Put "section" only on the FIRST line of each section.',
+  '- If cues are not workable, set mode "timeline" and leave "lines" empty — the sections',
+  '  alone are a complete, valid chart.',
   '- IMPORTANT — precision expected: do NOT invent a progression. If no published chart',
   '  exists for this exact song, set confidence "low", say so in "consensus", and return',
   '  empty lines and sections.',
@@ -136,6 +143,7 @@ child.on('error', (e) => {
 child.on('close', (code) => {
   if (code !== 0) {
     console.error(`claude exited ${code}`);
+    if (out.trim()) console.error(`--- output before failure ---\n${out.slice(0, 1500)}`);
     process.exit(1);
   }
   let parsed;

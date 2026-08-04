@@ -149,6 +149,41 @@ code {
   cursor: default;
   font-size: 0.9rem;
 }
+.search-results .group-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: default;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.3rem;
+}
+.search-results li.web .k {
+  color: var(--accent);
+}
+
+.request .cta {
+  display: inline-block;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--accent-dim);
+  border-radius: calc(var(--radius) - 2px);
+  background: hsl(160 40% 10%);
+  font-weight: 600;
+}
+.request .cta:hover {
+  background: hsl(160 40% 14%);
+  text-decoration: none;
+}
+.cmd {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0.7rem 0.9rem;
+  overflow-x: auto;
+}
 
 /* ---- Layout ---- */
 main {
