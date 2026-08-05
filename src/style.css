@@ -230,6 +230,18 @@ a.ext:hover { color: var(--fg); }
 .masthead h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2.1rem); letter-spacing: -0.02em; }
 .masthead .byline { margin: 0.2rem 0 0; color: var(--muted); }
 .masthead .meta { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.82rem; }
+/* The key on the left, the chart's own facts — BPM, release — on the right,
+   both above the rule. They used to open the first column and cost a quarter
+   of it before the first chord. */
+.masthead .headline { display: flex; align-items: flex-end; justify-content: space-between; gap: 1.5rem; }
+.masthead .facts { text-align: right; }
+.masthead .facts .meta { margin: 0.15rem 0 0; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  /* No width for two columns of header; the facts go under the key. */
+  .masthead .headline { display: block; }
+  .masthead .facts { text-align: left; }
+}
 
 .sheet { font-family: var(--mono); font-size: 0.92rem; line-height: 1.45; }
 .pair { break-inside: avoid; }
@@ -240,8 +252,13 @@ a.ext:hover { color: var(--fg); }
 .sheet.cols-2 { column-count: 2; column-gap: 2.25rem; column-rule: 1px solid var(--line); }
 .sheet.cols-2 .fixed { display: none; }
 .sheet.cols-2 .flow { display: block; line-height: 1.3; }
-/* A heading is worthless at the foot of a column with its verse in the next. */
-.sheet.cols-2 .section { break-after: avoid; }
+
+/* A section is the unit that breaks. Half a chorus at the foot of a column
+   with the rest overleaf cannot be played from, so the whole block moves to
+   the next column instead — even at the cost of white space. */
+.blk { break-inside: avoid; }
+/* A section's own trailing blank line should not push it over the edge. */
+.blk > .gap:last-child { height: 0; }
 .gap { height: 0.9rem; }
 .section {
   margin: 1.4rem 0 0.35rem;
@@ -351,6 +368,11 @@ pre.lyric { color: var(--fg); }
   }
 
   .pair { break-inside: avoid; page-break-inside: avoid; orphans: 2; widows: 2; }
+  /* Whole sections, never half of one — across columns and across pages. */
+  .blk { break-inside: avoid; page-break-inside: avoid; }
+  /* The chart's citation lines are for the screen; on paper they are a URL
+     nobody can click sitting where the music should be. */
+  .weblink { display: none !important; }
 
   @page { margin: 14mm 12mm; }
 }

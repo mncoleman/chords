@@ -81,6 +81,8 @@ const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"']+/g;
+/** Its own copy: URL_RE is global, and .test() on a global regex is stateful. */
+const hasUrl = (s: string) => /\bhttps?:\/\/[^\s<>"']+/.test(s);
 
 /** Escape for HTML, but turn bare URLs into links.
  *
@@ -824,6 +826,40 @@ function renderFlow(cells: Cell[]): string {
     .join('');
 }
 
+/** Lift the chart's opening facts out of the body and into the masthead.
+ *
+ *  UG charts open with loose notes — "BPM: 140", "Single released: 13 Oct
+ *  2023" — set as ordinary lines, which costs a quarter of the first column
+ *  before a single chord appears. They belong beside the key.
+ *
+ *  Only the plain ones move: a line carrying a URL stays in the body, where it
+ *  stays clickable and out of the printed page. */
+function splitPreamble(all: SheetLine[]): { facts: string[]; chart: SheetLine[] } {
+  const facts: string[] = [];
+  let i = 0;
+  for (; i < all.length; i++) {
+    const l = all[i];
+    // The preamble ends at the first section heading or the first chord.
+    if (l.section !== undefined || l.chords.length) break;
+    if (!l.lyric.trim()) continue;
+    if (hasUrl(l.lyric)) break;
+    // "BPM:      140" is column-aligned for a monospace block it has now left.
+    facts.push(l.lyric.trim().replace(/\s{2,}/g, ' '));
+  }
+  // Nothing lifted means nothing to skip — keep the body exactly as it was.
+  return facts.length ? { facts, chart: all.slice(i) } : { facts: [], chart: all };
+}
+
+/** One group per section, so a section can be kept whole across a break. */
+function groupBySection(all: SheetLine[]): SheetLine[][] {
+  const blocks: SheetLine[][] = [];
+  for (const l of all) {
+    if (l.section !== undefined || !blocks.length) blocks.push([]);
+    blocks[blocks.length - 1].push(l);
+  }
+  return blocks;
+}
+
 function drawSheet(): void {
   if (!sheet) return;
   const key = displayedKey();
@@ -871,15 +907,20 @@ function drawSheet(): void {
   // URL is offered as a link — anything else is not something to point at.
   const tabUrl = sheet.url && /^https?:\/\//i.test(sheet.url) ? sheet.url : null;
 
-  const body = (condensed ? condense(lines) : lines)
-    .map((l) => {
-      const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
-      if (!row && !l.lyric.trim() && !l.section) return '<div class="gap"></div>';
-      // Two renderings of the same line: the exact <pre> pair for wide screens
-      // and for print, and a wrapping one for phones. CSS picks.
-      const flow = renderFlow(toCells(l.chords, l.lyric));
-      return `
-      <div class="pair">
+  const all = condensed ? condense(lines) : lines;
+  const { facts, chart } = splitPreamble(all);
+
+  const renderLine = (l: SheetLine): string => {
+    const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
+    if (!row && !l.lyric.trim() && !l.section) return '<div class="gap"></div>';
+    // Two renderings of the same line: the exact <pre> pair for wide screens
+    // and for print, and a wrapping one for phones. CSS picks.
+    const flow = renderFlow(toCells(l.chords, l.lyric));
+    // A line that is only a citation — UG's "YouTube link to the version
+    // tabbed" — is worth a tap on screen and nothing at all on paper.
+    const cls = hasUrl(l.lyric) ? 'pair weblink' : 'pair';
+    return `
+      <div class="${cls}">
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
           ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
@@ -887,7 +928,13 @@ function drawSheet(): void {
         </div>
         <div class="flow">${flow}</div>
       </div>`;
-    })
+  };
+
+  // Grouped by section, because a break has to be allowed BETWEEN sections and
+  // forbidden inside one — and that is a property of a box, not of a line. A
+  // chorus split down the middle by a column or a page is unplayable.
+  const body = groupBySection(chart)
+    .map((blk) => `<section class="blk">${blk.map(renderLine).join('')}</section>`)
     .join('');
 
   main.innerHTML = `
@@ -897,14 +944,23 @@ function drawSheet(): void {
         <button id="print-m" class="primary screen-only" aria-label="Print or save as PDF">Print / PDF</button>
         <h1>${esc(sheet.song)}</h1>
         <p class="byline">${esc(sheet.artist)}</p>
-        ${meta ? `<p class="meta">${esc(meta)}</p>` : ''}
-        ${
-          tabUrl
-            ? // Screen only: on paper a link is just underlined text.
-              `<p class="meta screen-only"><a class="ext" href="${esc(tabUrl)}" target="_blank"
-                 rel="noopener noreferrer">Ultimate Guitar tab</a></p>`
-            : ''
-        }
+        <div class="headline">
+          <div>
+            ${meta ? `<p class="meta">${esc(meta)}</p>` : ''}
+            ${
+              tabUrl
+                ? // Screen only: on paper a link is just underlined text.
+                  `<p class="meta screen-only"><a class="ext" href="${esc(tabUrl)}" target="_blank"
+                     rel="noopener noreferrer">Ultimate Guitar tab</a></p>`
+                : ''
+            }
+          </div>
+          ${
+            facts.length
+              ? `<div class="facts">${facts.map((f) => `<p class="meta">${esc(f)}</p>`).join('')}</div>`
+              : ''
+          }
+        </div>
       </header>
       <div class="sheet${columns === 2 ? ' cols-2' : ''}">${body}</div>
       <footer class="credit">
