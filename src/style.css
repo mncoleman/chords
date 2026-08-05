@@ -260,8 +260,13 @@ a.ext:hover { color: var(--fg); }
 /* A section's own trailing blank line should not push it over the edge. */
 .blk > .gap:last-child { height: 0; }
 .gap { height: 0.9rem; }
+/* A band the full width of the column, so the eye finds the next section
+   without reading for it — the one thing you do while playing. */
 .section {
   margin: 1.4rem 0 0.35rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--card);
+  border-radius: 4px;
   font-family: var(--sans); font-size: 0.72rem;
   text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent);
 }
@@ -363,6 +368,11 @@ pre.lyric { color: var(--fg); }
 
   .section {
     color: #000 !important; font-size: 8.5pt; font-weight: 700; margin-top: 11pt;
+    /* The band has to survive the printer: without print-color-adjust, Chrome
+       drops every background and the headings lose their anchor. */
+    background: #e5e5e5 !important;
+    padding: 2.5pt 4pt; border-radius: 2pt;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
     /* Never leave a section heading stranded at the foot of a page. */
     break-after: avoid; page-break-after: avoid;
   }
