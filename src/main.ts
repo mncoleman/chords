@@ -58,6 +58,11 @@ interface Suggestion {
   art: string | null;
 }
 let acItems: Suggestion[] = [];
+/** The typed text the dropdown is currently open for; '' means closed. It is
+ *  kept apart from acItems because the list stays open, showing the
+ *  search-as-typed row, even when Spotify has nothing to offer. */
+let acRaw = '';
+/** -1 is the search-as-typed row at the top; 0+ index into acItems. */
 let acIndex = -1;
 let acTimer: number | undefined;
 let acSeq = 0;
@@ -455,19 +460,40 @@ async function suggest(q: string): Promise<void> {
   drawAutocomplete();
 }
 
+/** Put the dropdown away. */
+function closeAutocomplete(): void {
+  acItems = [];
+  acRaw = '';
+  acIndex = -1;
+  drawAutocomplete();
+}
+
 function drawAutocomplete(): void {
   const ul = document.getElementById('ac');
   const input = document.getElementById('q') as HTMLInputElement | null;
   if (!ul) return;
-  if (!acItems.length) {
+  if (!acRaw) {
     ul.hidden = true;
     ul.innerHTML = '';
     input?.setAttribute('aria-expanded', 'false');
     return;
   }
-  ul.innerHTML = acItems
-    .map(
-      (t, i) => `
+  // Spotify's titles are the tidy way in, but it does not know everything —
+  // hymns, worship songs, live arrangements. This row skips the tidying and
+  // hands the typed words straight to Ultimate Guitar.
+  const raw = `
+    <li role="option" data-raw="1" class="raw ${acIndex === -1 ? 'on' : ''}" aria-selected="${acIndex === -1}">
+      <span class="noart ic" aria-hidden="true">⌕</span>
+      <span class="st">
+        <span class="t">Search “${esc(acRaw)}”</span>
+        <span class="a">Look it up on Ultimate Guitar as typed</span>
+      </span>
+    </li>`;
+  ul.innerHTML =
+    raw +
+    acItems
+      .map(
+        (t, i) => `
       <li role="option" data-i="${i}" class="${i === acIndex ? 'on' : ''}" aria-selected="${i === acIndex}">
         ${t.art ? `<img src="${esc(t.art)}" alt="" loading="lazy">` : '<span class="noart"></span>'}
         <span class="st">
@@ -475,10 +501,18 @@ function drawAutocomplete(): void {
           <span class="a">${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ''}</span>
         </span>
       </li>`
-    )
-    .join('');
+      )
+      .join('');
   ul.hidden = false;
   input?.setAttribute('aria-expanded', 'true');
+}
+
+/** Search exactly what was typed, ignoring the suggestions. */
+function searchRaw(): void {
+  const q = acRaw || (document.getElementById('q') as HTMLInputElement | null)?.value.trim() || '';
+  if (q.length < 2) return;
+  closeAutocomplete();
+  void search(q);
 }
 
 function pickSuggestion(i: number): void {
@@ -487,8 +521,7 @@ function pickSuggestion(i: number): void {
   const input = document.getElementById('q') as HTMLInputElement | null;
   // Fill the box with the corrected spelling, then go straight to the chords.
   if (input) input.value = `${t.title} ${t.artist}`;
-  acItems = [];
-  drawAutocomplete();
+  closeAutocomplete();
   void search(`${t.title} ${t.artist}`);
 }
 
@@ -509,17 +542,22 @@ function wireSearch(): void {
     const q = input.value.trim();
     window.clearTimeout(acTimer);
     if (q.length < 2) {
-      acItems = [];
-      drawAutocomplete();
+      closeAutocomplete();
       return;
     }
+    // Open on the search-as-typed row straight away; the Spotify rows land
+    // underneath it when the debounced lookup comes back.
+    acRaw = q;
+    acIndex = -1;
+    drawAutocomplete();
     acTimer = window.setTimeout(() => void suggest(q), 200);
   });
 
   input.addEventListener('keydown', (ev) => {
-    if (!acItems.length || (ul as HTMLElement)?.hidden) return;
+    if (!acRaw || (ul as HTMLElement)?.hidden) return;
     if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
       ev.preventDefault();
+      // -1 is the search-as-typed row, so arrowing up off the list lands there.
       acIndex =
         ev.key === 'ArrowDown'
           ? Math.min(acItems.length - 1, acIndex + 1)
@@ -529,14 +567,17 @@ function wireSearch(): void {
       ev.preventDefault();
       pickSuggestion(acIndex);
     } else if (ev.key === 'Escape') {
-      acItems = [];
-      drawAutocomplete();
+      closeAutocomplete();
     }
   });
 
   ul?.addEventListener('mousedown', (ev) => {
     const li = (ev.target as HTMLElement).closest('li');
-    if (li?.dataset.i) {
+    if (!li) return;
+    if (li.dataset.raw) {
+      ev.preventDefault();
+      searchRaw();
+    } else if (li.dataset.i) {
       ev.preventDefault();
       pickSuggestion(Number(li.dataset.i));
     }
@@ -544,8 +585,7 @@ function wireSearch(): void {
 
   document.addEventListener('click', (ev) => {
     if (!(ev.target as HTMLElement).closest('.hero-search, .autocomplete')) {
-      acItems = [];
-      drawAutocomplete();
+      closeAutocomplete();
     }
   });
 
@@ -558,8 +598,7 @@ function wireSearch(): void {
     }
     const q = input.value.trim();
     if (q.length >= 2) {
-      acItems = [];
-      drawAutocomplete();
+      closeAutocomplete();
       void search(q);
     }
   });
