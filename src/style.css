@@ -134,13 +134,17 @@ a { color: inherit; text-decoration: none; }
   width: 5rem; accent-color: var(--accent); cursor: pointer;
   background: transparent; margin: 0;
 }
-.toolbar button {
+/* The masthead copies of these controls are named too: styling them by their
+   container alone leaves them with the browser's default light chrome, which
+   reads as broken on a dark page. It happened to Print first. */
+.toolbar button, .mh-tools .ctl button {
   background: transparent; border: 0; color: var(--muted); cursor: pointer;
   padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.85rem; font-family: inherit;
 }
-.toolbar button:hover:not(:disabled) { color: var(--fg); background: var(--card); }
-.toolbar button:disabled { opacity: 0.35; cursor: default; }
-.toolbar button.on { background: var(--card); color: var(--fg); }
+.toolbar button:hover:not(:disabled),
+.mh-tools .ctl button:hover:not(:disabled) { color: var(--fg); background: var(--card); }
+.toolbar button:disabled, .mh-tools .ctl button:disabled { opacity: 0.35; cursor: default; }
+.toolbar button.on, .mh-tools .ctl button.on { background: var(--card); color: var(--fg); }
 .toolbar button.primary { border: 1px solid var(--line); color: var(--fg); }
 
 /* Chord-over-lyric cells that WRAP. Hidden on wide screens and in print, where
@@ -257,6 +261,8 @@ a { color: inherit; text-decoration: none; }
   /* A slider needs saying what it is; 1 and 2 next to a chart do not, and the
      word costs the row more width than a 320px phone has to give. */
   .mh-tools .ctl.cols .lbl { display: none; }
+  /* Thumb-sized, like the toolbar's own. */
+  .mh-tools .ctl button { min-height: 2.2rem; padding: 0.3rem 0.6rem; font-size: 0.82rem; }
 }
 
 /* Links carried in from the chart text (UG preambles cite YouTube) and the
