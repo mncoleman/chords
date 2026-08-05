@@ -483,7 +483,11 @@ function drawAutocomplete(): void {
   // hands the typed words straight to Ultimate Guitar.
   const raw = `
     <li role="option" data-raw="1" class="raw ${acIndex === -1 ? 'on' : ''}" aria-selected="${acIndex === -1}">
-      <span class="noart ic" aria-hidden="true">⌕</span>
+      <span class="noart ic" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4.2-4.2"></path>
+        </svg>
+      </span>
       <span class="st">
         <span class="t">Search “${esc(acRaw)}”</span>
         <span class="a">Look it up on Ultimate Guitar as typed</span>
