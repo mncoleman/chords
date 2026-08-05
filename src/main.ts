@@ -47,6 +47,9 @@ let numbers = false;
 /** Filled in when UG ships a chart with no tonality of its own. */
 let inferredKey: string | null = null;
 let condensed = false;
+/** Two columns is right on a desktop and in print; one is the only thing that
+ *  fits a phone. Set from the viewport, then owned by the toggle. */
+let columns: 1 | 2 = window.matchMedia('(max-width: 640px)').matches ? 1 : 2;
 let searchSeq = 0;
 let lastQuery = '';
 
@@ -76,6 +79,25 @@ function signedOut(): void {
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+const URL_RE = /\bhttps?:\/\/[^\s<>"']+/g;
+
+/** Escape for HTML, but turn bare URLs into links.
+ *
+ *  UG charts routinely carry a preamble — BPM, release date, "YouTube link to
+ *  the version tabbed: https://…" — and a URL you cannot click is just noise. */
+function escLinks(s: string): string {
+  let out = '';
+  let last = 0;
+  for (const m of s.matchAll(URL_RE)) {
+    // Trailing punctuation reads as sentence, not address.
+    const href = m[0].replace(/[.,;:!?)\]]+$/, '');
+    out += esc(s.slice(last, m.index));
+    out += `<a class="ext" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(href)}</a>`;
+    last = m.index + href.length;
+  }
+  return out + esc(s.slice(last));
+}
 
 // ---------------------------------------------------------------------------
 // Chord display
@@ -797,7 +819,7 @@ function renderFlow(cells: Cell[]): string {
     .map(
       (c) =>
         `<span class="cw"><span class="cc">${c.chord ? esc(c.chord) : ''}</span>` +
-        `<span class="ct">${esc(c.text)}</span></span>`
+        `<span class="ct">${escLinks(c.text)}</span></span>`
     )
     .join('');
 }
@@ -826,7 +848,13 @@ function drawSheet(): void {
         <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
         <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
       </div>
+      <div class="ctl seg" role="group" aria-label="Columns">
+        <span class="lbl">Cols</span>
+        <button id="col-1" class="${columns === 1 ? 'on' : ''}" title="One column">1</button>
+        <button id="col-2" class="${columns === 2 ? 'on' : ''}" title="Two columns">2</button>
+      </div>
       <div class="spacer"></div>
+      <button id="print" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
     </div>`;
 
   const meta = [
@@ -838,6 +866,10 @@ function drawSheet(): void {
   ]
     .filter(Boolean)
     .join(' · ');
+
+  // The tab this chart came from, when UG named it. Only an absolute http(s)
+  // URL is offered as a link — anything else is not something to point at.
+  const tabUrl = sheet.url && /^https?:\/\//i.test(sheet.url) ? sheet.url : null;
 
   const body = (condensed ? condense(lines) : lines)
     .map((l) => {
@@ -851,7 +883,7 @@ function drawSheet(): void {
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
           ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
-          ${l.lyric.trim() ? `<pre class="lyric">${esc(l.lyric)}</pre>` : ''}
+          ${l.lyric.trim() ? `<pre class="lyric">${escLinks(l.lyric)}</pre>` : ''}
         </div>
         <div class="flow">${flow}</div>
       </div>`;
@@ -862,12 +894,19 @@ function drawSheet(): void {
     <article class="chart">
       ${toolbar}
       <header class="masthead">
-        <button id="print" class="primary screen-only" aria-label="Print or save as PDF">Print / PDF</button>
+        <button id="print-m" class="primary screen-only" aria-label="Print or save as PDF">Print / PDF</button>
         <h1>${esc(sheet.song)}</h1>
         <p class="byline">${esc(sheet.artist)}</p>
         ${meta ? `<p class="meta">${esc(meta)}</p>` : ''}
+        ${
+          tabUrl
+            ? // Screen only: on paper a link is just underlined text.
+              `<p class="meta screen-only"><a class="ext" href="${esc(tabUrl)}" target="_blank"
+                 rel="noopener noreferrer">Ultimate Guitar tab</a></p>`
+            : ''
+        }
       </header>
-      <div class="sheet">${body}</div>
+      <div class="sheet${columns === 2 ? ' cols-2' : ''}">${body}</div>
       <footer class="credit">
         Chart from Ultimate Guitar${sheet.rating ? ` · ${sheet.rating.toFixed(1)}★ from ${sheet.votes?.toLocaleString()} votes` : ''}.
         Chords are an interpretation; recordings vary.
@@ -908,7 +947,20 @@ function drawSheet(): void {
     condensed = true;
     drawSheet();
   });
+  on('col-1', () => {
+    if (columns === 1) return;
+    columns = 1;
+    drawSheet();
+  });
+  on('col-2', () => {
+    if (columns === 2) return;
+    columns = 2;
+    drawSheet();
+  });
+  // Two buttons, one per breakpoint: in the toolbar on a desktop, under the
+  // title on a phone, where the toolbar has no width to spare. CSS shows one.
   on('print', () => window.print());
+  on('print-m', () => window.print());
 }
 
 // ---------------------------------------------------------------------------

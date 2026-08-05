@@ -185,7 +185,10 @@ a { color: inherit; text-decoration: none; }
   .toolbar .back { padding: 0 0.2rem; }
   #tr-down, #tr-up { min-width: 2.2rem; min-height: 2.4rem; }
 
-  .masthead #print { margin-bottom: 0.75rem; }
+  /* On a phone the toolbar row is already full, so Print lives under the title
+     instead. The rule that shows it sits below, after its base styling — same
+     specificity, so it has to come later in the file to win. */
+  .toolbar #print { display: none; }
   /* − and + are hit mid-song, often without looking. Everything else on this
      row gives up width so these can reach a proper thumb-sized target. */
   #tr-down, #tr-up {
@@ -200,15 +203,28 @@ a { color: inherit; text-decoration: none; }
   pre.chords, pre.lyric { overflow-x: hidden; }
 }
 
-/* Moved out of the toolbar, this lost the toolbar's button styling and fell
-   back to the browser's default light chrome, which reads as broken on a dark
-   page. Same treatment as the controls above it. */
-.masthead #print {
+/* Outside the toolbar this lost the toolbar's button styling and fell back to
+   the browser's default light chrome, which reads as broken on a dark page.
+   Same treatment as the controls above it. Hidden on wide screens, where the
+   toolbar has room to carry Print itself. */
+.masthead #print-m {
+  display: none;
   background: transparent; color: var(--fg); cursor: pointer;
   border: 1px solid var(--line); border-radius: 8px;
   padding: 0.5rem 0.9rem; font: inherit; font-size: 0.84rem;
 }
-.masthead #print:hover { background: var(--card); }
+.masthead #print-m:hover { background: var(--card); }
+
+/* Pushed right and given room, so it never crowds the song title. */
+@media (max-width: 640px) {
+  .masthead #print-m { display: block; margin: 0 0 1.5rem auto; }
+}
+
+/* Links carried in from the chart text (UG preambles cite YouTube) and the
+   link back to the source tab. Underlined, because in a monospace block a
+   colour change alone does not read as clickable. */
+a.ext { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+a.ext:hover { color: var(--fg); }
 
 .masthead { padding: 2rem 0 1.25rem; }
 .masthead h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2.1rem); letter-spacing: -0.02em; }
@@ -217,6 +233,15 @@ a { color: inherit; text-decoration: none; }
 
 .sheet { font-family: var(--mono); font-size: 0.92rem; line-height: 1.45; }
 .pair { break-inside: avoid; }
+
+/* Two columns halves the measure, and half a page is not wide enough for the
+   exact <pre> pair — it would scroll sideways per line. So a two-column chart
+   uses the wrapping cells instead, the same ones a phone gets. */
+.sheet.cols-2 { column-count: 2; column-gap: 2.25rem; column-rule: 1px solid var(--line); }
+.sheet.cols-2 .fixed { display: none; }
+.sheet.cols-2 .flow { display: block; line-height: 1.3; }
+/* A heading is worthless at the foot of a column with its verse in the next. */
+.sheet.cols-2 .section { break-after: avoid; }
 .gap { height: 0.9rem; }
 .section {
   margin: 1.4rem 0 0.35rem;
@@ -300,6 +325,13 @@ pre.lyric { color: var(--fg); }
   .masthead .meta { font-size: 9pt; color: #000 !important; }
 
   .sheet { font-size: 10.5pt; line-height: 1.3; }
+
+  /* Print follows the toggle. Two columns means the narrow measure again, so
+     the wrapping cells win here even though print otherwise forces the pair. */
+  .sheet.cols-2 { column-count: 2; column-gap: 16pt; column-rule: 0.5pt solid #999; }
+  .sheet.cols-2 .fixed { display: none !important; }
+  .sheet.cols-2 .flow { display: block !important; font-size: 9.5pt; }
+  .sheet.cols-2 .cc { color: #000 !important; font-weight: 700; }
 
   /* Keep alignment: chords and lyrics are separate elements, so allowing them
      to wrap independently slides every chord off its syllable. Long lines are
