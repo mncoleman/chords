@@ -863,6 +863,24 @@ function groupBySection(all: SheetLine[]): SheetLine[][] {
   return blocks;
 }
 
+/** The controls exist twice, once per breakpoint: in the sticky toolbar on a
+ *  desktop, and in the masthead on a phone, where that row is full at four
+ *  groups and a fifth wrapped it onto a second line. Same markup, different id
+ *  suffix; CSS shows one, and both are wired. */
+const colSeg = (sfx: string) => `
+  <div class="ctl seg cols" role="group" aria-label="Columns">
+    <span class="lbl">Columns</span>
+    <button id="col-1${sfx}" class="${columns === 1 ? 'on' : ''}" title="One column">1</button>
+    <button id="col-2${sfx}" class="${columns === 2 ? 'on' : ''}" title="Two columns">2</button>
+  </div>`;
+
+const lhCtl = (sfx: string) => `
+  <div class="ctl lh">
+    <span class="lbl">Line</span>
+    <input id="lh${sfx}" type="range" min="1.05" max="1.9" step="0.05"
+           value="${lineHeight}" aria-label="Line spacing" title="Line spacing">
+  </div>`;
+
 function drawSheet(): void {
   if (!sheet) return;
   const key = displayedKey();
@@ -887,16 +905,8 @@ function drawSheet(): void {
         <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
         <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
       </div>
-      <div class="ctl lh screen-only">
-        <span class="lbl">Line</span>
-        <input id="lh" type="range" min="1.05" max="1.9" step="0.05"
-               value="${lineHeight}" aria-label="Line spacing" title="Line spacing">
-      </div>
-      <div class="ctl seg" role="group" aria-label="Columns">
-        <span class="lbl">Columns</span>
-        <button id="col-1" class="${columns === 1 ? 'on' : ''}" title="One column">1</button>
-        <button id="col-2" class="${columns === 2 ? 'on' : ''}" title="Two columns">2</button>
-      </div>
+      ${lhCtl('')}
+      ${colSeg('')}
       <div class="spacer"></div>
       <button id="print" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
     </div>`;
@@ -951,7 +961,11 @@ function drawSheet(): void {
     <article class="chart">
       ${toolbar}
       <header class="masthead">
-        <button id="print-m" class="primary screen-only" aria-label="Print or save as PDF">Print / PDF</button>
+        <div class="mh-tools screen-only">
+          ${lhCtl('-m')}
+          ${colSeg('-m')}
+          <button id="print-m" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
+        </div>
         <h1>${esc(sheet.song)}</h1>
         <p class="byline">${esc(sheet.artist)}</p>
         <div class="headline">
@@ -1013,22 +1027,32 @@ function drawSheet(): void {
     condensed = true;
     drawSheet();
   });
-  // Applied to the element rather than redrawn: a redraw per tick would take
-  // the slider out from under the pointer mid-drag.
-  document.getElementById('lh')?.addEventListener('input', (e) => {
-    lineHeight = Number((e.target as HTMLInputElement).value);
-    main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
-  });
-  on('col-1', () => {
-    if (columns === 1) return;
-    columns = 1;
-    drawSheet();
-  });
-  on('col-2', () => {
-    if (columns === 2) return;
-    columns = 2;
-    drawSheet();
-  });
+  // Two sliders, one per breakpoint — the toolbar on a desktop, the masthead on
+  // a phone, where that row has no width left. Applied to the element rather
+  // than redrawn: a redraw per tick would take the slider out from under the
+  // pointer mid-drag. The other slider is set too, so they never disagree.
+  for (const id of ['lh', 'lh-m']) {
+    document.getElementById(id)?.addEventListener('input', (e) => {
+      lineHeight = Number((e.target as HTMLInputElement).value);
+      main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
+      for (const other of ['lh', 'lh-m']) {
+        const el = document.getElementById(other) as HTMLInputElement | null;
+        if (el && el !== e.target) el.value = String(lineHeight);
+      }
+    });
+  }
+  for (const sfx of ['', '-m']) {
+    on(`col-1${sfx}`, () => {
+      if (columns === 1) return;
+      columns = 1;
+      drawSheet();
+    });
+    on(`col-2${sfx}`, () => {
+      if (columns === 2) return;
+      columns = 2;
+      drawSheet();
+    });
+  }
   // Two buttons, one per breakpoint: in the toolbar on a desktop, under the
   // title on a phone, where the toolbar has no width to spare. CSS shows one.
   on('print', () => window.print());

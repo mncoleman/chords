@@ -160,6 +160,10 @@ a { color: inherit; text-decoration: none; }
    one place the words should sit close together. */
 .pair.bare .cc { min-height: 0; padding-right: 0; }
 .ct { display: block; white-space: pre; }
+/* A URL is one unbreakable token, and a cell that wide pushes the whole page
+   sideways — the one thing the wrapping rendering exists to prevent. Nothing
+   is aligned to it, so it is free to break anywhere. */
+.pair.weblink .ct { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* --- phones ------------------------------------------------------------
    Wrapping put the controls on three rows, so the sticky bar covered the
@@ -200,8 +204,14 @@ a { color: inherit; text-decoration: none; }
      specificity, so it has to come later in the file to win. */
   .toolbar #print { display: none; }
   /* No width for a slider on a phone, and least need for one: a single column
-     that scrolls does not have to be made to fit anything. */
-  .ctl.lh { display: none; }
+     that scrolls does not have to be made to fit anything. Columns goes for the
+     same reason — two of them do not fit a phone, so the choice is not real —
+     and with both gone the row fits again instead of wrapping to two. */
+  .toolbar .ctl.lh, .toolbar .ctl.cols { display: none; }
+
+  /* The chart is the point; the header should not cost half the screen. */
+  /* The masthead's own phone rules live below, after its base styling — same
+     specificity, so anything set here would lose to the later rule. */
   /* − and + are hit mid-song, often without looking. Everything else on this
      row gives up width so these can reach a proper thumb-sized target. */
   #tr-down, #tr-up {
@@ -228,9 +238,25 @@ a { color: inherit; text-decoration: none; }
 }
 .masthead #print-m:hover { background: var(--card); }
 
-/* Pushed right and given room, so it never crowds the song title. */
+/* Line spacing, Columns and Print live in the toolbar everywhere but a phone,
+   where that row is full at four groups. There they share one right-aligned
+   row above the title — cheaper than the row Print used to take on its own,
+   and the sticky toolbar stays a single line. */
+.mh-tools { display: none; }
+
 @media (max-width: 640px) {
-  .masthead #print-m { display: block; margin: 0 0 1.5rem auto; }
+  .mh-tools {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 0.5rem; margin-bottom: 0.7rem;
+  }
+  .masthead #print-m { display: block; margin: 0; }
+  /* Labels are dropped from the toolbar for width; here there is room, and a
+     bare slider says nothing about what it does. */
+  .mh-tools .ctl .lbl { display: inline; }
+  .mh-tools .ctl.lh input { width: 3.5rem; }
+  /* A slider needs saying what it is; 1 and 2 next to a chart do not, and the
+     word costs the row more width than a 320px phone has to give. */
+  .mh-tools .ctl.cols .lbl { display: none; }
 }
 
 /* Links carried in from the chart text (UG preambles cite YouTube) and the
@@ -254,6 +280,8 @@ a.ext:hover { color: var(--fg); }
   /* No width for two columns of header; the facts go under the key. */
   .masthead .headline { display: block; }
   .masthead .facts { text-align: left; }
+  .masthead { padding: 0.75rem 0 1rem; }
+  .masthead .meta { margin-top: 0.2rem; }
 }
 
 /* --lh is set on .sheet by the line-spacing control, and every rule that
@@ -355,7 +383,10 @@ pre.lyric { color: var(--fg); }
 
   .screen-only, .toolbar, .hero-search, .results, .credit { display: none !important; }
 
-  .chart { max-width: none; padding: 0; }
+  /* Half the side gutter is @page and half is padding, adding up to what it
+     always was. Split, because a print dialog set to "no margins" overrides
+     @page and would otherwise run the chart off the edge of the paper. */
+  .chart { max-width: none; padding: 0 6mm; }
 
   .masthead { padding: 0 0 10pt; border-bottom: 0.5pt solid #000; margin-bottom: 12pt; }
   .masthead h1 { font-size: 17pt; }
@@ -400,7 +431,7 @@ pre.lyric { color: var(--fg); }
      nobody can click sitting where the music should be. */
   .weblink { display: none !important; }
 
-  @page { margin: 14mm 12mm; }
+  @page { margin: 14mm 6mm; }
 }
 
 /* ------------------------------------------------------- autocomplete ---- */
