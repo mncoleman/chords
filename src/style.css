@@ -176,7 +176,7 @@ a { color: inherit; text-decoration: none; }
    Letters/Numbers toggle. */
 .toolbar .narrow { display: none; }
 
-@media (max-width: 640px) {
+@media screen and (max-width: 640px) {
   .toolbar {
     flex-wrap: nowrap;
     gap: 0.4rem;
@@ -248,7 +248,7 @@ a { color: inherit; text-decoration: none; }
    and the sticky toolbar stays a single line. */
 .mh-tools { display: none; }
 
-@media (max-width: 640px) {
+@media screen and (max-width: 640px) {
   .mh-tools {
     display: flex; align-items: center; justify-content: flex-end;
     gap: 0.5rem; margin-bottom: 0.7rem;
@@ -282,7 +282,7 @@ a.ext:hover { color: var(--fg); }
 .masthead .facts { text-align: right; }
 .masthead .facts .meta { margin: 0.15rem 0 0; white-space: nowrap; }
 
-@media (max-width: 640px) {
+@media screen and (max-width: 640px) {
   /* No width for two columns of header; the facts go under the key. */
   .masthead .headline { display: block; }
   .masthead .facts { text-align: left; }
@@ -403,7 +403,14 @@ pre.lyric { color: var(--fg); }
 
   /* Print follows the toggle. Two columns means the narrow measure again, so
      the wrapping cells win here even though print otherwise forces the pair. */
-  .sheet.cols-2 { column-count: 2; column-gap: 16pt; column-rule: 0.5pt solid #999; }
+  /* Shorthand and prefix both, and fill each column before starting the next:
+     the longhand alone was ignored when printing from a phone, and the chart
+     came off as a single column. */
+  .sheet.cols-2 {
+    columns: 2; -webkit-columns: 2;
+    column-fill: auto; -webkit-column-fill: auto;
+    column-gap: 16pt; column-rule: 0.5pt solid #999;
+  }
   .sheet.cols-2 .fixed { display: none !important; }
   .sheet.cols-2 .flow { display: block !important; font-size: 9.5pt; }
   .sheet.cols-2 .cc { color: #000 !important; font-weight: 700; }
