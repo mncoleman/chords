@@ -50,6 +50,9 @@ let condensed = false;
 /** Two columns is right on a desktop and in print; one is the only thing that
  *  fits a phone. Set from the viewport, then owned by the toggle. */
 let columns: 1 | 2 = window.matchMedia('(max-width: 640px)').matches ? 1 : 2;
+/** Line spacing, screen and print alike. What decides whether a chart lands on
+ *  one page or two, so it is worth a control rather than a constant. */
+let lineHeight = 1.4;
 let searchSeq = 0;
 let lastQuery = '';
 
@@ -884,6 +887,11 @@ function drawSheet(): void {
         <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
         <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
       </div>
+      <div class="ctl lh screen-only">
+        <span class="lbl">Line</span>
+        <input id="lh" type="range" min="1.05" max="1.9" step="0.05"
+               value="${lineHeight}" aria-label="Line spacing" title="Line spacing">
+      </div>
       <div class="ctl seg" role="group" aria-label="Columns">
         <span class="lbl">Columns</span>
         <button id="col-1" class="${columns === 1 ? 'on' : ''}" title="One column">1</button>
@@ -918,7 +926,9 @@ function drawSheet(): void {
     const flow = renderFlow(toCells(l.chords, l.lyric));
     // A line that is only a citation — UG's "YouTube link to the version
     // tabbed" — is worth a tap on screen and nothing at all on paper.
-    const cls = hasUrl(l.lyric) ? 'pair weblink' : 'pair';
+    // A line with no chords of its own reserves no room for them: that empty
+    // row is what double-spaced every repeated verse in the short version.
+    const cls = `pair${hasUrl(l.lyric) ? ' weblink' : ''}${l.chords.length ? '' : ' bare'}`;
     return `
       <div class="${cls}">
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
@@ -962,7 +972,7 @@ function drawSheet(): void {
           }
         </div>
       </header>
-      <div class="sheet${columns === 2 ? ' cols-2' : ''}">${body}</div>
+      <div class="sheet${columns === 2 ? ' cols-2' : ''}" style="--lh:${lineHeight}">${body}</div>
       <footer class="credit">
         Chart from Ultimate Guitar${sheet.rating ? ` · ${sheet.rating.toFixed(1)}★ from ${sheet.votes?.toLocaleString()} votes` : ''}.
         Chords are an interpretation; recordings vary.
@@ -1002,6 +1012,12 @@ function drawSheet(): void {
     if (condensed) return;
     condensed = true;
     drawSheet();
+  });
+  // Applied to the element rather than redrawn: a redraw per tick would take
+  // the slider out from under the pointer mid-drag.
+  document.getElementById('lh')?.addEventListener('input', (e) => {
+    lineHeight = Number((e.target as HTMLInputElement).value);
+    main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
   });
   on('col-1', () => {
     if (columns === 1) return;

@@ -128,6 +128,12 @@ a { color: inherit; text-decoration: none; }
   min-width: 2rem; text-align: center; padding: 0.25rem 0.15rem;
 }
 .ctl .shift:disabled { opacity: 1; }
+/* Line spacing. A slider rather than a stepper: the useful range is narrow and
+   the right value is the one that just fits the page, which you find by eye. */
+.ctl.lh input {
+  width: 5rem; accent-color: var(--accent); cursor: pointer;
+  background: transparent; margin: 0;
+}
 .toolbar button {
   background: transparent; border: 0; color: var(--muted); cursor: pointer;
   padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.85rem; font-family: inherit;
@@ -145,10 +151,14 @@ a { color: inherit; text-decoration: none; }
   display: block; white-space: pre;
   color: var(--accent); font-weight: 600;
   /* Reserve the row even when this cell has no chord, so lyrics stay level. */
-  min-height: 1.35em; padding-right: 0.45em;
+  min-height: calc(var(--lh, 1.4) * 1em); padding-right: 0.45em;
 }
 /* Chordless cells are most cells — padding them would space every word out. */
 .cc:empty { padding-right: 0; }
+/* A line with no chords anywhere on it needs no room above it. Reserving it
+   anyway double-spaced every repeated verse in the short chart, which is the
+   one place the words should sit close together. */
+.pair.bare .cc { min-height: 0; padding-right: 0; }
 .ct { display: block; white-space: pre; }
 
 /* --- phones ------------------------------------------------------------
@@ -189,6 +199,9 @@ a { color: inherit; text-decoration: none; }
      instead. The rule that shows it sits below, after its base styling — same
      specificity, so it has to come later in the file to win. */
   .toolbar #print { display: none; }
+  /* No width for a slider on a phone, and least need for one: a single column
+     that scrolls does not have to be made to fit anything. */
+  .ctl.lh { display: none; }
   /* − and + are hit mid-song, often without looking. Everything else on this
      row gives up width so these can reach a proper thumb-sized target. */
   #tr-down, #tr-up {
@@ -199,7 +212,7 @@ a { color: inherit; text-decoration: none; }
 
   /* Read it while playing: the chart must never scroll sideways. */
   .fixed { display: none; }
-  .flow { display: block; line-height: 1.25; }
+  .flow { display: block; line-height: var(--lh, 1.4); }
   pre.chords, pre.lyric { overflow-x: hidden; }
 }
 
@@ -243,7 +256,10 @@ a.ext:hover { color: var(--fg); }
   .masthead .facts { text-align: left; }
 }
 
-.sheet { font-family: var(--mono); font-size: 0.92rem; line-height: 1.45; }
+/* --lh is set on .sheet by the line-spacing control, and every rule that
+   sets a line height reads it — otherwise a rule further down wins and the
+   control moves nothing. */
+.sheet { font-family: var(--mono); font-size: 0.92rem; line-height: var(--lh, 1.4); }
 .pair { break-inside: avoid; }
 
 /* Two columns halves the measure, and half a page is not wide enough for the
@@ -251,7 +267,7 @@ a.ext:hover { color: var(--fg); }
    uses the wrapping cells instead, the same ones a phone gets. */
 .sheet.cols-2 { column-count: 2; column-gap: 2.25rem; column-rule: 1px solid var(--line); }
 .sheet.cols-2 .fixed { display: none; }
-.sheet.cols-2 .flow { display: block; line-height: 1.3; }
+.sheet.cols-2 .flow { display: block; line-height: var(--lh, 1.4); }
 
 /* A section is the unit that breaks. Half a chorus at the foot of a column
    with the rest overleaf cannot be played from, so the whole block moves to
@@ -346,7 +362,7 @@ pre.lyric { color: var(--fg); }
   .masthead .byline { font-size: 11pt; color: #000 !important; }
   .masthead .meta { font-size: 9pt; color: #000 !important; }
 
-  .sheet { font-size: 10.5pt; line-height: 1.3; }
+  .sheet { font-size: 10.5pt; line-height: var(--lh, 1.4); }
 
   /* Print follows the toggle. Two columns means the narrow measure again, so
      the wrapping cells win here even though print otherwise forces the pair. */
