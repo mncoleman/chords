@@ -849,7 +849,7 @@ function drawSheet(): void {
         <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
       </div>
       <div class="ctl seg" role="group" aria-label="Columns">
-        <span class="lbl">Cols</span>
+        <span class="lbl">Columns</span>
         <button id="col-1" class="${columns === 1 ? 'on' : ''}" title="One column">1</button>
         <button id="col-2" class="${columns === 2 ? 'on' : ''}" title="Two columns">2</button>
       </div>
