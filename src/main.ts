@@ -67,6 +67,8 @@ interface Suggestion {
   id: string;
   title: string;
   artist: string;
+  /** The credited artists separately. UG files a song under one of them. */
+  artists?: string[];
   year: string | null;
   art: string | null;
 }
@@ -588,7 +590,11 @@ function pickSuggestion(i: number): void {
   // Fill the box with the corrected spelling, then go straight to the chords.
   if (input) input.value = `${t.title} ${t.artist}`;
   closeAutocomplete();
-  void search(`${t.title} ${t.artist}`);
+  // Title and artist go separately, and only the first credited artist goes at
+  // all. Joined into one string they were searched as a song TITLE, so every
+  // collaboration asked Ultimate Guitar for a song called "The Blessing Kari
+  // Jobe, Cody Carnes, Elevation Worship" and got nothing.
+  void search({ title: t.title, artist: t.artists?.[0] || t.artist.split(',')[0].trim() });
 }
 
 function wireSearch(): void {
@@ -670,19 +676,65 @@ function wireSearch(): void {
   });
 }
 
-async function search(q: string): Promise<void> {
-  lastQuery = q;
+/** What was asked for: a suggestion picked from the dropdown carries its title
+ *  and artist apart, and anything typed by hand is just text. */
+interface Ask {
+  q?: string;
+  title?: string;
+  artist?: string;
+}
+
+/** Which rung of the server's fallback answered, when it was not the first. */
+let searchNote: string | null = null;
+
+function askUrl(ask: Ask): string {
+  const p = new URLSearchParams();
+  if (ask.title) p.set('title', ask.title);
+  if (ask.artist) p.set('artist', ask.artist);
+  if (ask.q) p.set('q', ask.q);
+  return `/api/ug?${p}`;
+}
+
+async function search(ask: Ask | string): Promise<void> {
+  const a: Ask = typeof ask === 'string' ? { q: ask } : ask;
+  lastQuery = a.q || [a.title, a.artist].filter(Boolean).join(' ');
   const seq = ++searchSeq;
   const box = document.getElementById('results');
   if (box) box.innerHTML = `<p class="muted loading">Searching…</p>`;
+  searchNote = null;
 
   try {
-    const res = await fetch(`/api/ug?q=${encodeURIComponent(q)}`);
+    let res = await fetch(askUrl(a));
     if (res.status === 401) return signedOut();
-    const data = await res.json();
+    let data = await res.json();
     if (seq !== searchSeq) return;
     if (data.error) throw new Error(data.error);
+
+    // Nothing at all for something typed by hand. Ultimate Guitar tolerates a
+    // truncated word but not a misspelt one — "goodnes of god" finds the song,
+    // "grattitude" finds nothing — while Spotify corrects spelling for a
+    // living. So ask Spotify what the words were meant to be and search again.
+    if (!(data.results ?? []).length && a.q) {
+      const fixed = await correctSpelling(a.q);
+      if (seq !== searchSeq) return;
+      if (fixed) {
+        res = await fetch(askUrl(fixed.ask));
+        if (res.status === 401) return signedOut();
+        const second = await res.json();
+        if (seq !== searchSeq) return;
+        if ((second.results ?? []).length) {
+          data = second;
+          searchNote = `Nothing for “${a.q}”. Showing ${fixed.label}.`;
+        }
+      }
+    }
+
     hits = data.results ?? [];
+    // The song was found, but not by the artist asked for — which is the usual
+    // case for a cover: UG files the song under whoever wrote it.
+    if (hits.length && !searchNote && a.artist && (data.matched === 'title' || data.matched === 'normalized-title')) {
+      searchNote = `No Ultimate Guitar chart credited to ${a.artist}. Showing this song by other artists.`;
+    }
   } catch (e) {
     if (seq !== searchSeq) return;
     const box2 = document.getElementById('results');
@@ -692,14 +744,32 @@ async function search(q: string): Promise<void> {
   renderResults();
 }
 
+/** Spotify's best guess at what a misspelt query meant. */
+async function correctSpelling(q: string): Promise<{ ask: Ask; label: string } | null> {
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const top: Suggestion | undefined = (data.tracks ?? [])[0];
+    if (!top) return null;
+    const artist = top.artists?.[0] || top.artist.split(',')[0].trim();
+    return { ask: { title: top.title, artist }, label: `“${top.title}” by ${artist}` };
+  } catch {
+    return null;
+  }
+}
+
 function renderResults(): void {
   const box = document.getElementById('results');
   if (!box) return;
   if (!hits.length) {
-    box.innerHTML = `<p class="muted">Nothing found. Try the artist name as well.</p>`;
+    box.innerHTML = `<p class="muted">Nothing on Ultimate Guitar for that${
+      lastQuery ? ` — searched for “${esc(lastQuery)}”` : ''
+    }. Try fewer words, or the song title on its own.</p>`;
     return;
   }
   box.innerHTML = `
+    ${searchNote ? `<p class="muted note searchnote">${esc(searchNote)}</p>` : ''}
     <ul class="hitlist">
       ${hits
         .map(

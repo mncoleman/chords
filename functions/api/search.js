@@ -75,6 +75,11 @@ export async function onRequestGet({ request, env }) {
       id: t.id,
       title: t.name,
       artist: (t.artists || []).map((a) => a.name).join(', '),
+      // The credited artists on their own as well as joined for display. UG
+      // files a song under one artist, so searching it with all three of a
+      // collaboration's names found nothing at all: "The Blessing Kari Jobe,
+      // Cody Carnes, Elevation Worship" is not a title anyone has tabbed.
+      artists: (t.artists || []).map((a) => a.name),
       album: t.album?.name ?? null,
       year: (t.album?.release_date || '').slice(0, 4) || null,
       art: t.album?.images?.length ? t.album.images[t.album.images.length - 1].url : null,
