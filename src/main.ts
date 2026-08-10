@@ -10,6 +10,12 @@ import {
 } from './music';
 import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
 
+/** Commit and build time, stamped in by vite. See buildStamp() there. */
+declare const __BUILD__: string;
+/** A function, not a constant: esc is declared further down and reading it here
+ *  at module load would be a temporal-dead-zone error. */
+const buildLine = () => `<p class="build screen-only">Build ${esc(__BUILD__)}</p>`;
+
 // Chord sheets come from Ultimate Guitar's mobile API, proxied through
 // /api/ug — UG sends no CORS headers, and the request has to be signed, so it
 // cannot happen in the browser. Everything after that is local: parsing,
@@ -176,7 +182,8 @@ function renderHome(msg?: string): void {
       <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
       ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
       <div id="results" class="results"></div>
-    </section>`;
+    </section>
+    ${buildLine()}`;
   wireSearch();
   void (async () => {
     try {
@@ -1025,6 +1032,7 @@ function drawSheet(): void {
       <footer class="credit">
         Chart from Ultimate Guitar${sheet.rating ? ` · ${sheet.rating.toFixed(1)}★ from ${sheet.votes?.toLocaleString()} votes` : ''}.
         Chords are an interpretation; recordings vary.
+        ${buildLine()}
       </footer>
     </article>`;
 
