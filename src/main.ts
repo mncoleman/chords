@@ -54,12 +54,40 @@ let numbers = false;
 /** Filled in when UG ships a chart with no tonality of its own. */
 let inferredKey: string | null = null;
 let condensed = false;
+/** Settings that outlive the page. The app is installed to a home screen and
+ *  reopened between songs, and having to set the columns and the spacing again
+ *  every time is the kind of small tax that gets paid mid-service. */
+function remembered<T>(key: string, fallback: T, ok: (v: unknown) => boolean): T {
+  try {
+    const raw = localStorage.getItem(`chords.${key}`);
+    if (raw === null) return fallback;
+    const v = JSON.parse(raw);
+    return ok(v) ? (v as T) : fallback;
+  } catch {
+    // Private browsing, or a value written by an older version.
+    return fallback;
+  }
+}
+
+function remember(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(`chords.${key}`, JSON.stringify(value));
+  } catch {
+    /* storage is a convenience, never a requirement */
+  }
+}
+
 /** Two columns is right on a desktop and in print; one is the only thing that
- *  fits a phone. Set from the viewport, then owned by the toggle. */
-let columns: 1 | 2 = window.matchMedia('(max-width: 640px)').matches ? 1 : 2;
+ *  fits a phone. Set from the viewport the first time, then owned by the toggle
+ *  and kept. */
+let columns: 1 | 2 = remembered<1 | 2>(
+  'columns',
+  window.matchMedia('(max-width: 640px)').matches ? 1 : 2,
+  (v) => v === 1 || v === 2
+);
 /** Line spacing, screen and print alike. What decides whether a chart lands on
  *  one page or two, so it is worth a control rather than a constant. */
-let lineHeight = 1.4;
+let lineHeight = remembered('lineHeight', 1.4, (v) => typeof v === 'number' && v >= 1 && v <= 2);
 let searchSeq = 0;
 let lastQuery = '';
 
@@ -942,6 +970,32 @@ function renderFlow(cells: Cell[]): string {
  *
  *  Only the plain ones move: a line carrying a URL stays in the body, where it
  *  stays clickable and out of the printed page. */
+/** Does this preamble line only repeat what the masthead already shows?
+ *
+ *  Compared on words rather than as text, because UG writes it loosely:
+ *  "Gratitude by Brandon Lake", "Song: Gratitude", "Capo: 4th fret". */
+function restatesMasthead(line: string): boolean {
+  if (!sheet) return false;
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+  const said = new Set([
+    ...norm(sheet.song),
+    ...norm(sheet.artist),
+    // The words a preamble uses to join them up, none of which carry anything.
+    ...['by', 'song', 'title', 'artist', 'band', 'chords', 'tab', 'key', 'of'],
+    ...(sheet.capo ? ['capo', String(sheet.capo), 'fret', 'st', 'nd', 'rd', 'th'] : []),
+    ...(sheet.key ? ['key', ...norm(sheet.key)] : []),
+    ...(sheet.tuning ? ['tuning', ...norm(sheet.tuning)] : []),
+  ]);
+  const w = norm(line);
+  // A word the masthead does not already carry makes the line worth keeping.
+  return w.length > 0 && w.every((x) => said.has(x));
+}
+
 function splitPreamble(all: SheetLine[]): { facts: string[]; chart: SheetLine[] } {
   const facts: string[] = [];
   let i = 0;
@@ -952,7 +1006,11 @@ function splitPreamble(all: SheetLine[]): { facts: string[]; chart: SheetLine[] 
     if (!l.lyric.trim()) continue;
     if (hasUrl(l.lyric)) break;
     // "BPM:      140" is column-aligned for a monospace block it has now left.
-    facts.push(l.lyric.trim().replace(/\s{2,}/g, ' '));
+    const fact = l.lyric.trim().replace(/\s{2,}/g, ' ');
+    // UG preambles open by naming the song, the artist and the capo — all three
+    // of which the masthead has already said in larger type directly above.
+    // Printed, the duplicate cost four lines at the top of every chart.
+    if (!restatesMasthead(fact)) facts.push(fact);
   }
   // Nothing lifted means nothing to skip — keep the body exactly as it was.
   return facts.length ? { facts, chart: all.slice(i) } : { facts: [], chart: all };
@@ -1282,6 +1340,7 @@ function drawSheet(): void {
   for (const id of ['lh', 'lh-m']) {
     document.getElementById(id)?.addEventListener('input', (e) => {
       lineHeight = Number((e.target as HTMLInputElement).value);
+      remember('lineHeight', lineHeight);
       main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
       for (const other of ['lh', 'lh-m']) {
         const el = document.getElementById(other) as HTMLInputElement | null;
@@ -1293,11 +1352,13 @@ function drawSheet(): void {
     on(`col-1${sfx}`, () => {
       if (columns === 1) return;
       columns = 1;
+      remember('columns', columns);
       drawSheet();
     });
     on(`col-2${sfx}`, () => {
       if (columns === 2) return;
       columns = 2;
+      remember('columns', columns);
       drawSheet();
     });
   }
