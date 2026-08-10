@@ -888,6 +888,141 @@ function splitPreamble(all: SheetLine[]): { facts: string[]; chart: SheetLine[] 
   return facts.length ? { facts, chart: all.slice(i) } : { facts: [], chart: all };
 }
 
+// ---------------------------------------------------------------------------
+// Two-column print
+// ---------------------------------------------------------------------------
+// WebKit switches CSS multi-column layout OFF in paged media — bug 15546, filed
+// in 2007 and still open — so `columns: 2` is honoured on an iPhone's screen and
+// silently ignored on its paper. Blink fixed the same bug years ago, which is
+// why this only ever showed up printing from a phone. No stylesheet can turn a
+// feature back on that the engine has disabled, so for print the columns are
+// built as real elements instead: sections are measured, packed into two columns
+// a page, and emitted as one row per page. The screen keeps using multicol,
+// which works there.
+
+/** CSS pixels per millimetre. Paper is measured in mm, so the packing is too —
+ *  it makes every constant below a length you can hold a ruler against. */
+const MM = 96 / 25.4;
+/** A4 is the narrower common paper and Letter the shorter, so taking one
+ *  dimension from each means the packing fits whichever is loaded. Guessing
+ *  wrong only ever costs white space; guessing generous costs a stray page. */
+const PAPER_W = 210;
+const PAPER_H = 279.4;
+/** @page gives 6mm a side and .chart another 6mm. */
+const SIDE_MM = 12;
+/** @page gives 14mm top and bottom. Safari prints its own date, URL and page
+ *  number into that margin, so a little more is left than the rule asks for. */
+const VERT_MM = 14 * 2 + 12;
+/** The 16pt gutter between the columns. */
+const GUTTER_MM = (16 / 72) * 25.4;
+/** Title, byline, key line and the rule under them, which sit above the chart on
+ *  the first page and shorten both of its columns. */
+const MASTHEAD_MM = 46;
+
+function printColWidthMm(): number {
+  return (PAPER_W - 2 * SIDE_MM - GUTTER_MM) / 2;
+}
+
+/** Height of each section at the width and type size it will print at.
+ *
+ *  Measured rather than estimated: how a lyric wraps inside a 93mm column is
+ *  the whole question, and counting characters guesses at it. The rig is a real
+ *  element laid out at the real width, just parked off-screen. */
+function measureBlocks(blocks: HTMLElement[]): number[] {
+  const rig = document.createElement('div');
+  rig.className = 'sheet rehearse';
+  rig.style.width = `${printColWidthMm()}mm`;
+  rig.style.setProperty('--lh', String(lineHeight));
+  const clones = blocks.map((b) => b.cloneNode(true) as HTMLElement);
+  for (const c of clones) rig.appendChild(c);
+  document.body.appendChild(rig);
+  const heights = clones.map((c) => c.getBoundingClientRect().height);
+  rig.remove();
+  return heights;
+}
+
+/** Fill a column, then the one beside it, then start a page. Column order, not
+ *  row order: a chart is read down one column and then down the next, and any
+ *  other packing reorders the song. */
+function packColumns(heights: number[]): number[][][] {
+  const full = (PAPER_H - VERT_MM) * MM;
+  const first = full - MASTHEAD_MM * MM;
+
+  const pages: number[][][] = [];
+  let page: number[][] = [[], []];
+  let col = 0;
+  let used = 0;
+
+  for (let i = 0; i < heights.length; i++) {
+    const limit = pages.length ? full : first;
+    // Never leave a column empty: a section taller than a whole column has to
+    // overflow somewhere, and starting a fresh column with it just moves the
+    // overflow along.
+    if (used > 0 && used + heights[i] > limit) {
+      if (col === 0) {
+        col = 1;
+      } else {
+        pages.push(page);
+        page = [[], []];
+        col = 0;
+      }
+      used = 0;
+    }
+    page[col].push(i);
+    used += heights[i];
+  }
+  pages.push(page);
+  return pages;
+}
+
+/** Build the printable pages beside the chart. Idempotent: printing twice, or a
+ *  browser that fires beforeprint as well as the button being pressed, rebuilds
+ *  rather than doubling. */
+function buildPrintPages(): void {
+  clearPrintPages();
+  const article = main.querySelector('.chart');
+  const sheetEl = main.querySelector<HTMLElement>('.sheet');
+  // One column prints correctly as it is; there is nothing to lay out.
+  if (!article || !sheetEl || columns !== 2) return;
+
+  const blocks = [...sheetEl.querySelectorAll<HTMLElement>('.blk')];
+  if (!blocks.length) return;
+
+  const heights = measureBlocks(blocks);
+  const paged = document.createElement('div');
+  paged.className = 'paged';
+  paged.style.setProperty('--lh', String(lineHeight));
+
+  for (const page of packColumns(heights)) {
+    const pageEl = document.createElement('div');
+    pageEl.className = 'ppage';
+    for (const col of page) {
+      const colEl = document.createElement('div');
+      colEl.className = 'pcol';
+      for (const i of col) colEl.appendChild(blocks[i].cloneNode(true));
+      pageEl.appendChild(colEl);
+    }
+    paged.appendChild(pageEl);
+  }
+  article.appendChild(paged);
+  // A class rather than a sibling selector, so the rule that hides the original
+  // chart needs nothing newer than the phones this has to print from.
+  article.classList.add('paginated');
+}
+
+function clearPrintPages(): void {
+  main.querySelector('.paged')?.remove();
+  main.querySelector('.chart')?.classList.remove('paginated');
+}
+
+/** Lay the pages out, print, and take them away again. They are built at the
+ *  moment of printing because line spacing, transposition and the chart's own
+ *  length can all change between one print and the next. */
+function printChart(): void {
+  buildPrintPages();
+  window.print();
+}
+
 /** One group per section, so a section can be kept whole across a break. */
 function groupBySection(all: SheetLine[]): SheetLine[][] {
   const blocks: SheetLine[][] = [];
@@ -1098,8 +1233,8 @@ function drawSheet(): void {
   }
   // Two buttons, one per breakpoint: in the toolbar on a desktop, under the
   // title on a phone, where the toolbar has no width to spare. CSS shows one.
-  on('print', () => window.print());
-  on('print-m', () => window.print());
+  on('print', printChart);
+  on('print-m', printChart);
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,6 +1258,12 @@ function route(): void {
 }
 
 window.addEventListener('hashchange', route);
+
+// Print reached by keyboard or by the browser's own menu rather than the app's
+// button. Building twice is harmless — buildPrintPages() clears first — and the
+// pages are cleared afterwards so nothing but the print view ever sees them.
+window.addEventListener('beforeprint', buildPrintPages);
+window.addEventListener('afterprint', clearPrintPages);
 
 // Keep the search a keystroke away from anywhere.
 window.addEventListener('keydown', (ev) => {
