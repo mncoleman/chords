@@ -140,6 +140,19 @@ export function keyTonicOf(key: string | null): string | null {
   return m ? m[1] : null;
 }
 
+/** The tonic Nashville numbers count from.
+ *
+ *  A capo chart names one key and prints another: UG ships "Key of B · Capo 4"
+ *  over shapes of G, Em, D, C. Numbers taken against the sounding key turned an
+ *  ordinary 1 6m 5 4 into b6 4m b3 b2, so the capo comes off the key first and
+ *  the numbers are read in the frame the chart is written in. Any transposition
+ *  the reader has applied moves with it. */
+export function writtenTonic(key: string | null, capo: number, semitones: number): string | null {
+  const tonic = keyTonicOf(key);
+  if (!tonic) return null;
+  return transposeSymbol(tonic, intervalForSemitones(semitones - capo)).split('/')[0];
+}
+
 /** Whether a key string names a minor key ("Am", "F#m", "Cmin"). */
 export function keyIsMinor(key: string | null): boolean {
   if (!key) return false;

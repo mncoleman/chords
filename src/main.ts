@@ -6,6 +6,7 @@ import {
   keyTonicOf,
   toNashville,
   transposeSymbol,
+  writtenTonic,
 } from './music';
 import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
 
@@ -141,9 +142,7 @@ function numberCapo(): number {
 /** The tonic the numbers count from: the key as the chart is written, not as it
  *  sounds. */
 function numberTonic(): string | null {
-  const tonic = keyTonicOf(effectiveKey());
-  if (!tonic) return null;
-  return transposeSymbol(tonic, intervalForSemitones(semitones - numberCapo())).split('/')[0];
+  return writtenTonic(effectiveKey(), numberCapo(), semitones);
 }
 
 /** That tonic as a key name, for saying so on the header line. */
