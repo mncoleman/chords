@@ -90,7 +90,25 @@ export async function onRequest(context) {
   // Demand a session token that names a user. "Any valid JWT" was not enough:
   // the PKCE stash is also a valid JWT, and it is handed to anyone who asks.
   const payload = await verifyJwt(cookie(request, SESSION), env.JWT_SECRET, 'session');
-  if (payload && payload.sub && (await stillAllowed(env, payload.sub))) return next();
+  if (payload && payload.sub && (await stillAllowed(env, payload.sub))) {
+    const res = await next();
+    // A hashed asset that does not exist gets answered with the app shell —
+    // Pages' fallback for an unknown path — and a 200 of text/html under a .js
+    // URL is cacheable, so the browser keeps it and the app loads to a blank
+    // page until storage is cleared by hand. It happens in the seconds a new
+    // deploy is propagating, which is exactly when the page is being reloaded
+    // to see the new build. Answer honestly instead: nothing here yet.
+    if (/^\/assets\/.+\.(js|css)$/.test(url.pathname)) {
+      const type = res.headers.get('Content-Type') || '';
+      if (type.includes('text/html')) {
+        return new Response('/* asset not found */', {
+          status: 404,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+      }
+    }
+    return res;
+  }
 
   // An unauthenticated API call should get a machine-readable 401, not HTML —
   // otherwise the app's fetch() parses a login page as JSON and reports
