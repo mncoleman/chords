@@ -308,19 +308,25 @@ a.ext:hover { color: var(--fg); }
    buildPrintPages(). None of it is for the screen. */
 .paged { display: none; }
 
-/* Where the sections are measured before they are packed. A real element at the
-   real column width, parked off-screen — the type here MUST match the print
-   type below, or the packing is measured against a page that never prints. */
+/* The printed type, defined ONCE and used by both the printed page and the rig
+   that measures it. It used to be written out twice — once here and once inside
+   @media print — and the two drifted: sections printed up to a fifth taller than
+   the rig had measured, so a chorus overran its page and spilled onto a sheet of
+   its own. Two copies of a measurement are two measurements. */
+.printtype { font-size: 9.5pt; }
+.printtype .fixed { display: none; }
+.printtype .flow { display: block; font-size: 9.5pt; line-height: var(--lh, 1.4); }
+.printtype .cc { font-weight: 700; }
+.printtype .section { font-size: 8.5pt; margin: 11pt 0 0.35rem; padding: 2.5pt 4pt; }
+/* Whatever print hides takes no room on paper and must take none here either. */
+.printtype .screen-only, .printtype .weblink { display: none; }
+
+/* Where the sections are measured before they are packed: a real element at the
+   real column width, carrying the real print type, parked off-screen. */
 .rehearse {
   position: absolute; left: -10000px; top: 0;
   visibility: hidden;
-  font-size: 9.5pt;
 }
-.rehearse .fixed { display: none; }
-.rehearse .flow { display: block; line-height: var(--lh, 1.4); }
-.rehearse .section { font-size: 8.5pt; margin: 11pt 0 0.35rem; padding: 2.5pt 4pt; }
-/* Whatever print hides takes no room on paper and must take none here either. */
-.rehearse .screen-only, .rehearse .weblink { display: none; }
 
 /* The masthead, measured the same way and for the same reason: it shortens the
    first page's columns, and a row of columns that overruns its page moves whole
@@ -474,11 +480,11 @@ pre.lyric { color: var(--fg); }
   /* Out of flow, so nothing inside it can be broken up or thrown away. */
   .paged .blk { break-inside: auto; page-break-inside: auto; }
 
-  /* Half the measure, so the wrapping cells are used rather than the exact pair
-     — the same choice the screen makes at this width. */
+  /* The type itself comes from .printtype, which the rig measured. Only what
+     paper needs and a screen does not belongs here. */
   .paged .fixed { display: none !important; }
-  .paged .flow { display: block !important; font-size: 9.5pt; line-height: var(--lh, 1.4); }
-  .paged .cc { color: #000 !important; font-weight: 700; }
+  .paged .flow { display: block !important; }
+  .paged .cc { color: #000 !important; }
 
   /* Temporary. What the packing assumed, so the sheet that comes out of the
      printer can be held against it — the one measurement that cannot be taken

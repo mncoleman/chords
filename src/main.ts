@@ -1053,12 +1053,16 @@ const VERT_MM = 14 * 2 + 12;
 const GUTTER_MM = (16 / 72) * 25.4;
 /** Slack, in millimetres, on every page. */
 const SLACK_MM = 8;
-/** How much taller a section prints than the rehearsal rig says. Measured from a
- *  PDF printed on the phone: +7% on a one-line intro, +11% on a verse, +19% on a
- *  chorus — it scales with the number of lines, so it is per-line drift between
- *  the rig's copy of the print type and the real thing. 1.2 covers the worst
- *  seen with a little to spare. */
-const MEASURE_SAFETY = 1.2;
+/** A little more than the rig says, for the difference between a page laid out
+ *  on a screen and the same page laid out on paper.
+ *
+ *  It used to need a fifth: the rig kept its own hand-written copy of the print
+ *  type, the two drifted, and a chorus printed 19% taller than measured and
+ *  spilled onto a sheet of its own. Both now read one .printtype rule, so what
+ *  is left is engine difference rather than a divergent stylesheet. The margin
+ *  is deliberately the smaller error: a page packed light wastes some white
+ *  space, a page packed heavy wastes a whole sheet. */
+const MEASURE_SAFETY = 1.06;
 
 function printColWidthMm(): number {
   return (PAPER_W - 2 * SIDE_MM - GUTTER_MM) / 2;
@@ -1074,7 +1078,7 @@ function mastheadHeightMm(): number {
   if (!mast) return 0;
   const rig = document.createElement('div');
   // No .chart: its padding would narrow the measure and overstate the height.
-  rig.className = 'rehearse rehearse-mast';
+  rig.className = 'rehearse rehearse-mast printtype';
   rig.style.width = `${PAPER_W - 2 * SIDE_MM}mm`;
   rig.appendChild(mast.cloneNode(true));
   document.body.appendChild(rig);
@@ -1093,7 +1097,7 @@ function mastheadHeightMm(): number {
  *  element laid out at the real width, just parked off-screen. */
 function measureBlocks(blocks: HTMLElement[]): number[] {
   const rig = document.createElement('div');
-  rig.className = 'sheet rehearse';
+  rig.className = 'sheet rehearse printtype';
   rig.style.width = `${printColWidthMm()}mm`;
   rig.style.setProperty('--lh', String(lineHeight));
   const clones = blocks.map((b) => b.cloneNode(true) as HTMLElement);
@@ -1161,7 +1165,7 @@ function buildPrintPages(): void {
   const heights = measureBlocks(blocks);
   const mastMm = mastheadHeightMm();
   const paged = document.createElement('div');
-  paged.className = 'paged';
+  paged.className = 'paged printtype';
   paged.style.setProperty('--lh', String(lineHeight));
 
   const pages = packColumns(heights, mastMm);
