@@ -124,10 +124,39 @@ function displayedKey(): string | null {
   return keyIsMinor(effectiveKey()) ? `${t}m` : t;
 }
 
+/** The capo the NUMBERS have to allow for.
+ *
+ *  UG names the key the song sounds in but prints the shapes you actually hold:
+ *  "Key of B · Capo 4" over a chart of G, Em, D, C. Counting those shapes
+ *  against B turned a plain 1 6m 5 4 into b6 4m b3 b2 — the numbers were being
+ *  read in one frame and the chords written in another.
+ *
+ *  Only when UG gave the key. A key we inferred ourselves was read off the
+ *  printed shapes, so it is already in their frame and must not be shifted
+ *  again. */
+function numberCapo(): number {
+  return sheet?.key ? sheet.capo || 0 : 0;
+}
+
+/** The tonic the numbers count from: the key as the chart is written, not as it
+ *  sounds. */
+function numberTonic(): string | null {
+  const tonic = keyTonicOf(effectiveKey());
+  if (!tonic) return null;
+  return transposeSymbol(tonic, intervalForSemitones(semitones - numberCapo())).split('/')[0];
+}
+
+/** That tonic as a key name, for saying so on the header line. */
+function numberKey(): string | null {
+  const t = numberTonic();
+  if (!t) return null;
+  return keyIsMinor(effectiveKey()) ? `${t}m` : t;
+}
+
 function renderSymbol(sym: string): string {
   if (/^N\.?C\.?$/.test(sym)) return sym;
   const t = transposeSymbol(sym, intervalForSemitones(semitones));
-  return numbers ? toNashville(t, displayedTonic()) : t;
+  return numbers ? toNashville(t, numberTonic()) : t;
 }
 
 // ---------------------------------------------------------------------------
@@ -914,7 +943,14 @@ function drawSheet(): void {
   const meta = [
     key ? `Key of ${key}${!sheet.key && inferredKey ? ' (detected)' : ''}` : null,
     semitones ? `transposed ${shift}` : null,
-    numbers ? 'Nashville numbers' : null,
+    // With a capo the numbers count from the shapes' key, not the sounding one
+    // named alongside it. Two keys on one line is confusing unless the line says
+    // which is which.
+    numbers
+      ? numberCapo() && numberKey()
+        ? `Nashville numbers from ${numberKey()}`
+        : 'Nashville numbers'
+      : null,
     sheet.capo ? `Capo ${sheet.capo}` : null,
     sheet.tuning ? `Tuning ${sheet.tuning}` : null,
   ]
