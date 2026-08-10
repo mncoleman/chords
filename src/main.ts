@@ -1056,13 +1056,15 @@ const SLACK_MM = 8;
 /** A little more than the rig says, for the difference between a page laid out
  *  on a screen and the same page laid out on paper.
  *
- *  It used to need a fifth: the rig kept its own hand-written copy of the print
- *  type, the two drifted, and a chorus printed 19% taller than measured and
- *  spilled onto a sheet of its own. Both now read one .printtype rule, so what
- *  is left is engine difference rather than a divergent stylesheet. The margin
- *  is deliberately the smaller error: a page packed light wastes some white
- *  space, a page packed heavy wastes a whole sheet. */
-const MEASURE_SAFETY = 1.06;
+ *  MEASURED, twice, off PDFs printed from the phone: a column the rig made 178mm
+ *  printed at 205mm. Sharing one .printtype rule between the rig and the page
+ *  did not change it, which settles what it is — iOS lays text out differently
+ *  for paper than for a screen, and no stylesheet reaches that. The ratio is
+ *  about 1.15; this keeps a little beyond it, because the two errors are not
+ *  equal. Packed light, a page carries some white space. Packed heavy, the
+ *  column overruns its box, spills onto the next sheet, and the page that
+ *  should have followed does not print at all. */
+const MEASURE_SAFETY = 1.22;
 
 function printColWidthMm(): number {
   return (PAPER_W - 2 * SIDE_MM - GUTTER_MM) / 2;
