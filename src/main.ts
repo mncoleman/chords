@@ -1045,8 +1045,10 @@ const PAPER_H = 279.4;
 /** @page gives 6mm a side and .chart another 6mm. */
 const SIDE_MM = 12;
 /** @page gives 14mm top and bottom. Safari prints its own date, URL and page
- *  number into that margin, so a little more is left than the rule asks for. */
-const VERT_MM = 14 * 2 + 12;
+ *  number into that margin, and a printer keeps a hardware margin of its own, so
+ *  rather more is left than the rule asks for. Measured against a real HP
+ *  OfficeJet from an iPhone: the paper holds far less than the arithmetic said. */
+const VERT_MM = 14 * 2 + 24;
 /** The 16pt gutter between the columns. */
 const GUTTER_MM = (16 / 72) * 25.4;
 /** Slack. A page of columns is a flex row, and a flex row does not split: if it
@@ -1147,11 +1149,21 @@ function buildPrintPages(): void {
   if (!blocks.length) return;
 
   const heights = measureBlocks(blocks);
+  const mastMm = mastheadHeightMm();
   const paged = document.createElement('div');
   paged.className = 'paged';
   paged.style.setProperty('--lh', String(lineHeight));
 
-  for (const page of packColumns(heights, mastheadHeightMm())) {
+  const pages = packColumns(heights, mastMm);
+  // What the packing believed, printed small at the foot of the chart. Paper is
+  // the only place this can be checked — there is no way to lay out a printed
+  // page here and measure it — so the page has to say what it assumed and be
+  // held against the sheet that comes out of the printer.
+  const tallest = pages.map((p) =>
+    Math.round(Math.max(...p.map((col) => col.reduce((sum, i) => sum + heights[i], 0))) / MM)
+  );
+
+  for (const page of pages) {
     const pageEl = document.createElement('div');
     pageEl.className = 'ppage';
     for (const col of page) {
@@ -1162,6 +1174,16 @@ function buildPrintPages(): void {
     }
     paged.appendChild(pageEl);
   }
+
+  const budget = Math.round(((PAPER_H - VERT_MM - SLACK_MM) * MM) / MM);
+  const note = document.createElement('p');
+  note.className = 'packinfo';
+  note.textContent =
+    `pack ${blocks.length} sections · col ${printColWidthMm().toFixed(0)}mm · ` +
+    `masthead ${mastMm.toFixed(0)}mm · budget ${budget}mm/page · ` +
+    `pages ${tallest.map((h, i) => `${i + 1}:${h}mm`).join(' ')} · lh ${lineHeight}`;
+  paged.appendChild(note);
+
   article.appendChild(paged);
   // A class rather than a sibling selector, so the rule that hides the original
   // chart needs nothing newer than the phones this has to print from.

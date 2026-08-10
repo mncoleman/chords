@@ -449,9 +449,13 @@ pre.lyric { color: var(--fg); }
   .chart.paginated .sheet { display: none !important; }
   .ppage {
     display: flex; gap: 16pt;
-    /* A page's worth of columns is one row and is never worth splitting: half of
-       it overleaf is two half-columns nobody can read down. */
-    break-inside: avoid; page-break-inside: avoid;
+    /* Splittable ON PURPOSE. Forbidding it means a row that turns out taller
+       than the paper can be neither divided nor fitted, so WebKit moves it whole
+       to the next sheet and then clips what hangs off the bottom — a blank first
+       page and three sections that never printed at all. The packing aims to
+       keep each row inside one page; if it is ever wrong, spilling over is a
+       worse-looking page and losing the bridge is a worse night. */
+    break-inside: auto; page-break-inside: auto;
   }
   /* The break goes BEFORE each page after the first, not after every page.
      Asking to break after a row that cannot itself be split left the first sheet
@@ -468,6 +472,14 @@ pre.lyric { color: var(--fg); }
   .paged .fixed { display: none !important; }
   .paged .flow { display: block !important; font-size: 9.5pt; line-height: var(--lh, 1.4); }
   .paged .cc { color: #000 !important; font-weight: 700; }
+
+  /* Temporary. What the packing assumed, so the sheet that comes out of the
+     printer can be held against it — the one measurement that cannot be taken
+     from this side. Remove once the numbers are trusted. */
+  .packinfo {
+    margin: 6pt 0 0; font-family: monospace; font-size: 6pt; color: #999 !important;
+    break-before: avoid; page-break-before: avoid;
+  }
 
   /* The chart still prints in one column when that is what was asked for, and
      when the pages could not be built. */
