@@ -447,14 +447,19 @@ pre.lyric { color: var(--fg); }
      When .paged is present it replaces the chart entirely. */
   .paged { display: block; }
   .chart.paginated .sheet { display: none !important; }
+  /* A TABLE, not a flex row.
+     WebKit does not fragment flex containers: a flex row is one indivisible
+     block to the printer whatever break-inside says. So a row of columns even
+     slightly taller than the page could be neither split nor fitted — it moved
+     whole to the next sheet, leaving the first blank, and then had its overflow
+     clipped, which is how the bridge and the last chorus failed to print at all.
+     Asking it not to break, and later asking it to break, changed nothing,
+     because the engine was never consulting either.
+     Table fragmentation is the oldest and best-tested path in the engine: a row
+     too tall for the page continues onto the next one, both columns together. */
   .ppage {
-    display: flex; gap: 16pt;
-    /* Splittable ON PURPOSE. Forbidding it means a row that turns out taller
-       than the paper can be neither divided nor fitted, so WebKit moves it whole
-       to the next sheet and then clips what hangs off the bottom — a blank first
-       page and three sections that never printed at all. The packing aims to
-       keep each row inside one page; if it is ever wrong, spilling over is a
-       worse-looking page and losing the bridge is a worse night. */
+    display: table; width: 100%; table-layout: fixed;
+    border-collapse: collapse;
     break-inside: auto; page-break-inside: auto;
   }
   /* The break goes BEFORE each page after the first, not after every page.
@@ -463,7 +468,7 @@ pre.lyric { color: var(--fg); }
      row is a blank sheet at the end by construction. Stated this way there is
      no break to mishandle at either end. */
   .ppage + .ppage { break-before: page; page-break-before: always; }
-  .pcol { flex: 1 1 0; min-width: 0; }
+  .pcol { display: table-cell; width: 50%; vertical-align: top; }
   .pcol + .pcol { border-left: 0.5pt solid #999; padding-left: 8pt; }
   .pcol:first-child { padding-right: 8pt; }
 
