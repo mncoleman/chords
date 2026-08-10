@@ -1049,12 +1049,33 @@ const SIDE_MM = 12;
 const VERT_MM = 14 * 2 + 12;
 /** The 16pt gutter between the columns. */
 const GUTTER_MM = (16 / 72) * 25.4;
-/** Title, byline, key line and the rule under them, which sit above the chart on
- *  the first page and shorten both of its columns. */
-const MASTHEAD_MM = 46;
+/** Slack. A page of columns is a flex row, and a flex row does not split: if it
+ *  overruns its page by a millimetre the whole row moves to the next one and
+ *  leaves the page it came from empty. Erring short costs white space; erring
+ *  long costs a blank page. */
+const SLACK_MM = 8;
 
 function printColWidthMm(): number {
   return (PAPER_W - 2 * SIDE_MM - GUTTER_MM) / 2;
+}
+
+/** How much of the first page the masthead takes.
+ *
+ *  Measured, not assumed. It was assumed at 46mm, and a masthead taller than
+ *  that overran the first page — so its row of columns, which cannot be split,
+ *  moved to the second page and left the first one blank. */
+function mastheadHeightMm(): number {
+  const mast = main.querySelector('.masthead');
+  if (!mast) return 0;
+  const rig = document.createElement('div');
+  // No .chart: its padding would narrow the measure and overstate the height.
+  rig.className = 'rehearse rehearse-mast';
+  rig.style.width = `${PAPER_W - 2 * SIDE_MM}mm`;
+  rig.appendChild(mast.cloneNode(true));
+  document.body.appendChild(rig);
+  const h = rig.getBoundingClientRect().height / MM;
+  rig.remove();
+  return h;
 }
 
 /** Height of each section at the width and type size it will print at.
@@ -1078,9 +1099,9 @@ function measureBlocks(blocks: HTMLElement[]): number[] {
 /** Fill a column, then the one beside it, then start a page. Column order, not
  *  row order: a chart is read down one column and then down the next, and any
  *  other packing reorders the song. */
-function packColumns(heights: number[]): number[][][] {
-  const full = (PAPER_H - VERT_MM) * MM;
-  const first = full - MASTHEAD_MM * MM;
+function packColumns(heights: number[], mastheadMm: number): number[][][] {
+  const full = (PAPER_H - VERT_MM - SLACK_MM) * MM;
+  const first = full - mastheadMm * MM;
 
   const pages: number[][][] = [];
   let page: number[][] = [[], []];
@@ -1127,7 +1148,7 @@ function buildPrintPages(): void {
   paged.className = 'paged';
   paged.style.setProperty('--lh', String(lineHeight));
 
-  for (const page of packColumns(heights)) {
+  for (const page of packColumns(heights, mastheadHeightMm())) {
     const pageEl = document.createElement('div');
     pageEl.className = 'ppage';
     for (const col of page) {

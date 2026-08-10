@@ -319,6 +319,18 @@ a.ext:hover { color: var(--fg); }
 .rehearse .fixed { display: none; }
 .rehearse .flow { display: block; line-height: var(--lh, 1.4); }
 .rehearse .section { font-size: 8.5pt; margin: 11pt 0 0.35rem; padding: 2.5pt 4pt; }
+/* Whatever print hides takes no room on paper and must take none here either. */
+.rehearse .screen-only, .rehearse .weblink { display: none; }
+
+/* The masthead, measured the same way and for the same reason: it shortens the
+   first page's columns, and a row of columns that overruns its page moves whole
+   to the next one — leaving the first page blank. Keep in step with the
+   masthead rules in @media print. */
+.rehearse-mast { font-size: 10.5pt; }
+.rehearse-mast .masthead { padding: 0 0 10pt; border-bottom: 0.5pt solid #000; margin-bottom: 12pt; }
+.rehearse-mast .masthead h1 { font-size: 17pt; }
+.rehearse-mast .masthead .byline { font-size: 11pt; }
+.rehearse-mast .masthead .meta { font-size: 9pt; }
 
 /* A section is the unit that breaks. Half a chorus at the foot of a column
    with the rest overleaf cannot be played from, so the whole block moves to
@@ -438,6 +450,9 @@ pre.lyric { color: var(--fg); }
   .ppage {
     display: flex; gap: 16pt;
     break-after: page; page-break-after: always;
+    /* A page's worth of columns is one row and is never worth splitting: half of
+       it overleaf is two half-columns nobody can read down. */
+    break-inside: avoid; page-break-inside: avoid;
   }
   /* No blank sheet after the last page. */
   .ppage:last-child { break-after: auto; page-break-after: auto; }
