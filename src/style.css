@@ -449,13 +449,16 @@ pre.lyric { color: var(--fg); }
   .chart.paginated .sheet { display: none !important; }
   .ppage {
     display: flex; gap: 16pt;
-    break-after: page; page-break-after: always;
     /* A page's worth of columns is one row and is never worth splitting: half of
        it overleaf is two half-columns nobody can read down. */
     break-inside: avoid; page-break-inside: avoid;
   }
-  /* No blank sheet after the last page. */
-  .ppage:last-child { break-after: auto; page-break-after: auto; }
+  /* The break goes BEFORE each page after the first, not after every page.
+     Asking to break after a row that cannot itself be split left the first sheet
+     empty and pushed the whole chart back a page — and a break after the last
+     row is a blank sheet at the end by construction. Stated this way there is
+     no break to mishandle at either end. */
+  .ppage + .ppage { break-before: page; page-break-before: always; }
   .pcol { flex: 1 1 0; min-width: 0; }
   .pcol + .pcol { border-left: 0.5pt solid #999; padding-left: 8pt; }
   .pcol:first-child { padding-right: 8pt; }

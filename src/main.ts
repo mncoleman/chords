@@ -1075,7 +1075,10 @@ function mastheadHeightMm(): number {
   document.body.appendChild(rig);
   const h = rig.getBoundingClientRect().height / MM;
   rig.remove();
-  return h;
+  // A little over rather than a little under: the first row of columns cannot be
+  // split, so a first page that is one millimetre short does not lose a line, it
+  // loses the whole page.
+  return h + 6;
 }
 
 /** Height of each section at the width and type size it will print at.
