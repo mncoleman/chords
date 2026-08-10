@@ -1086,10 +1086,12 @@ function mastheadHeightMm(): number {
   document.body.appendChild(rig);
   const h = rig.getBoundingClientRect().height / MM;
   rig.remove();
-  // A little over rather than a little under: the first row of columns cannot be
-  // split, so a first page that is one millimetre short does not lose a line, it
-  // loses the whole page.
-  return h + 6;
+  // The masthead prints taller than it measures for the same reason every
+  // section does, and it is measured on the screen like everything else — 26mm
+  // in the rig, about 36mm on paper. Under-reading it pushed the first page's
+  // box past the foot of the sheet, which cost a blank page and, in the cascade
+  // that followed, the last page of the song.
+  return h * MEASURE_SAFETY + 8;
 }
 
 /** Height of each section at the width and type size it will print at.
@@ -1183,10 +1185,15 @@ function buildPrintPages(): void {
   for (const [n, page] of pages.entries()) {
     const pageEl = document.createElement('div');
     pageEl.className = 'ppage';
-    // A box of a known height. The columns inside are positioned absolutely and
-    // so are out of flow entirely — there is nothing left for the engine to
-    // fragment, which is what kept losing whole sections.
-    pageEl.style.height = `${(n === 0 ? fullMm - mastMm : fullMm).toFixed(1)}mm`;
+    // As tall as what it holds, not as tall as the page allows.
+    //
+    // Sizing every box to the whole page budget meant a box could end just past
+    // the foot of the sheet even when its columns fitted easily — and a box that
+    // overshoots by four millimetres costs an entire blank page, then pushes the
+    // page after it off the end of the document. Sized to its contents, a box
+    // that fits cannot overshoot at all. The budget still decides what goes on
+    // the page; it no longer decides how tall the page's box is.
+    pageEl.style.height = `${(tallest[n] + 2).toFixed(1)}mm`;
     for (const col of page) {
       const colEl = document.createElement('div');
       colEl.className = 'pcol';
@@ -1203,7 +1210,8 @@ function buildPrintPages(): void {
   note.className = 'packinfo';
   note.textContent =
     `pack ${blocks.length} sections · col ${printColWidthMm().toFixed(0)}mm · ` +
-    `masthead ${mastMm.toFixed(0)}mm · box ${(fullMm - mastMm).toFixed(0)}/${fullMm.toFixed(0)}mm · ` +
+    `masthead ${mastMm.toFixed(0)}mm · budget ${(fullMm - mastMm).toFixed(0)}/${fullMm.toFixed(0)}mm · ` +
+    `boxes ${tallest.map((h) => h + 2).join('/')}mm · ` +
     `safety ${MEASURE_SAFETY} · cols ${tallest.map((h, i) => `${i + 1}:${h}mm`).join(' ')} · lh ${lineHeight}`;
   paged.firstElementChild?.appendChild(note);
 
