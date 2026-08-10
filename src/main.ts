@@ -1044,11 +1044,11 @@ const PAPER_W = 210;
 const PAPER_H = 279.4;
 /** @page gives 6mm a side and .chart another 6mm. */
 const SIDE_MM = 12;
-/** @page gives 14mm top and bottom. Safari prints its own date, URL and page
- *  number into that margin, and a printer keeps a hardware margin of its own, so
- *  rather more is left than the rule asks for. Measured against a real HP
- *  OfficeJet from an iPhone: the paper holds far less than the arithmetic said. */
-const VERT_MM = 14 * 2 + 24;
+/** @page gives 14mm top and bottom. MEASURED off a PDF printed from the phone:
+ *  the masthead sat 28mm tall and 211mm of column ran below it, which puts the
+ *  content box at 239mm — the arithmetic here was right all along, and the
+ *  content that went missing was never a question of height. */
+const VERT_MM = 14 * 2 + 12;
 /** The 16pt gutter between the columns. */
 const GUTTER_MM = (16 / 72) * 25.4;
 /** Slack. A page of columns is a flex row, and a flex row does not split: if it
@@ -1163,9 +1163,14 @@ function buildPrintPages(): void {
     Math.round(Math.max(...p.map((col) => col.reduce((sum, i) => sum + heights[i], 0))) / MM)
   );
 
-  for (const page of pages) {
+  const fullMm = PAPER_H - VERT_MM - SLACK_MM;
+  for (const [n, page] of pages.entries()) {
     const pageEl = document.createElement('div');
     pageEl.className = 'ppage';
+    // A box of a known height. The columns inside are positioned absolutely and
+    // so are out of flow entirely — there is nothing left for the engine to
+    // fragment, which is what kept losing whole sections.
+    pageEl.style.height = `${(n === 0 ? fullMm - mastMm : fullMm).toFixed(1)}mm`;
     for (const col of page) {
       const colEl = document.createElement('div');
       colEl.className = 'pcol';

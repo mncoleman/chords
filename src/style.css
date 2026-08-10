@@ -447,20 +447,20 @@ pre.lyric { color: var(--fg); }
      When .paged is present it replaces the chart entirely. */
   .paged { display: block; }
   .chart.paginated .sheet { display: none !important; }
-  /* A TABLE, not a flex row.
-     WebKit does not fragment flex containers: a flex row is one indivisible
-     block to the printer whatever break-inside says. So a row of columns even
-     slightly taller than the page could be neither split nor fitted — it moved
-     whole to the next sheet, leaving the first blank, and then had its overflow
-     clipped, which is how the bridge and the last chorus failed to print at all.
-     Asking it not to break, and later asking it to break, changed nothing,
-     because the engine was never consulting either.
-     Table fragmentation is the oldest and best-tested path in the engine: a row
-     too tall for the page continues onto the next one, both columns together. */
+  /* NOTHING here is allowed to fragment.
+     Every previous attempt handed the columns to the engine's fragmentation and
+     lost: a flex row is monolithic in WebKit, so it moved whole to the next
+     sheet and clipped; a table row splits but DROPS the blocks inside it that
+     carry break-inside: avoid — the printed page had 66mm of space left and had
+     still discarded the bridge, the interlude and the diagnostic line.
+     So each page is now a box of a known height with its columns positioned
+     absolutely inside it. Absolutely positioned content is out of flow and is
+     never fragmented: it renders whole or not at all, and the packing keeps it
+     comfortably inside the box. The only break left is the one between pages. */
   .ppage {
-    display: table; width: 100%; table-layout: fixed;
-    border-collapse: collapse;
-    break-inside: auto; page-break-inside: auto;
+    position: relative;
+    /* height is set per page, in mm, by buildPrintPages() */
+    overflow: visible;
   }
   /* The break goes BEFORE each page after the first, not after every page.
      Asking to break after a row that cannot itself be split left the first sheet
@@ -468,9 +468,11 @@ pre.lyric { color: var(--fg); }
      row is a blank sheet at the end by construction. Stated this way there is
      no break to mishandle at either end. */
   .ppage + .ppage { break-before: page; page-break-before: always; }
-  .pcol { display: table-cell; width: 50%; vertical-align: top; }
-  .pcol + .pcol { border-left: 0.5pt solid #999; padding-left: 8pt; }
-  .pcol:first-child { padding-right: 8pt; }
+  .pcol { position: absolute; top: 0; width: calc(50% - 8pt); }
+  .pcol:first-child { left: 0; padding-right: 8pt; }
+  .pcol + .pcol { left: calc(50% + 8pt); border-left: 0.5pt solid #999; padding-left: 8pt; }
+  /* Out of flow, so nothing inside it can be broken up or thrown away. */
+  .paged .blk { break-inside: auto; page-break-inside: auto; }
 
   /* Half the measure, so the wrapping cells are used rather than the exact pair
      — the same choice the screen makes at this width. */
