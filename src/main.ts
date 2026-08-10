@@ -1051,11 +1051,14 @@ const SIDE_MM = 12;
 const VERT_MM = 14 * 2 + 12;
 /** The 16pt gutter between the columns. */
 const GUTTER_MM = (16 / 72) * 25.4;
-/** Slack. A page of columns is a flex row, and a flex row does not split: if it
- *  overruns its page by a millimetre the whole row moves to the next one and
- *  leaves the page it came from empty. Erring short costs white space; erring
- *  long costs a blank page. */
+/** Slack, in millimetres, on every page. */
 const SLACK_MM = 8;
+/** How much taller a section prints than the rehearsal rig says. Measured from a
+ *  PDF printed on the phone: +7% on a one-line intro, +11% on a verse, +19% on a
+ *  chorus — it scales with the number of lines, so it is per-line drift between
+ *  the rig's copy of the print type and the real thing. 1.2 covers the worst
+ *  seen with a little to spare. */
+const MEASURE_SAFETY = 1.2;
 
 function printColWidthMm(): number {
   return (PAPER_W - 2 * SIDE_MM - GUTTER_MM) / 2;
@@ -1098,7 +1101,14 @@ function measureBlocks(blocks: HTMLElement[]): number[] {
   document.body.appendChild(rig);
   const heights = clones.map((c) => c.getBoundingClientRect().height);
   rig.remove();
-  return heights;
+  // The rig mirrors the print typography by hand, and hand-copied type drifts:
+  // measured against a PDF printed from the phone, every section came out
+  // taller on paper than in the rig — about half a millimetre per line, so the
+  // longer the section the worse the error (a chorus was out by 19%). Rather
+  // than trust the copy, allow for it. Packing a page slightly light costs
+  // white space; packing it heavy costs a wasted sheet, which is what the
+  // spilled chorus was.
+  return heights.map((h) => h * MEASURE_SAFETY);
 }
 
 /** Fill a column, then the one beside it, then start a page. Column order, not
@@ -1180,14 +1190,16 @@ function buildPrintPages(): void {
     paged.appendChild(pageEl);
   }
 
-  const budget = Math.round(((PAPER_H - VERT_MM - SLACK_MM) * MM) / MM);
+  // Inside the first page box, not after the last one: after the last box it
+  // fell past the end of the document and never printed, on either of the two
+  // PDFs it was supposed to explain.
   const note = document.createElement('p');
   note.className = 'packinfo';
   note.textContent =
     `pack ${blocks.length} sections · col ${printColWidthMm().toFixed(0)}mm · ` +
-    `masthead ${mastMm.toFixed(0)}mm · budget ${budget}mm/page · ` +
-    `pages ${tallest.map((h, i) => `${i + 1}:${h}mm`).join(' ')} · lh ${lineHeight}`;
-  paged.appendChild(note);
+    `masthead ${mastMm.toFixed(0)}mm · box ${(fullMm - mastMm).toFixed(0)}/${fullMm.toFixed(0)}mm · ` +
+    `safety ${MEASURE_SAFETY} · cols ${tallest.map((h, i) => `${i + 1}:${h}mm`).join(' ')} · lh ${lineHeight}`;
+  paged.firstElementChild?.appendChild(note);
 
   article.appendChild(paged);
   // A class rather than a sibling selector, so the rule that hides the original
