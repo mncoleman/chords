@@ -999,12 +999,18 @@ function restatesMasthead(line: string): boolean {
 function splitPreamble(all: SheetLine[]): { facts: string[]; chart: SheetLine[] } {
   const facts: string[] = [];
   let i = 0;
+  // Counted apart from facts: a preamble line that only repeats the masthead is
+  // dropped rather than kept, and it still has to leave the body. Testing
+  // facts.length instead put every one of them back into the chart the moment
+  // they were all duplicates, which is exactly the charts this is for.
+  let lifted = 0;
   for (; i < all.length; i++) {
     const l = all[i];
     // The preamble ends at the first section heading or the first chord.
     if (l.section !== undefined || l.chords.length) break;
     if (!l.lyric.trim()) continue;
     if (hasUrl(l.lyric)) break;
+    lifted++;
     // "BPM:      140" is column-aligned for a monospace block it has now left.
     const fact = l.lyric.trim().replace(/\s{2,}/g, ' ');
     // UG preambles open by naming the song, the artist and the capo — all three
@@ -1013,7 +1019,7 @@ function splitPreamble(all: SheetLine[]): { facts: string[]; chart: SheetLine[] 
     if (!restatesMasthead(fact)) facts.push(fact);
   }
   // Nothing lifted means nothing to skip — keep the body exactly as it was.
-  return facts.length ? { facts, chart: all.slice(i) } : { facts: [], chart: all };
+  return lifted ? { facts, chart: all.slice(i) } : { facts: [], chart: all };
 }
 
 // ---------------------------------------------------------------------------
