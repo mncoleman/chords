@@ -268,6 +268,19 @@ function renderHome(msg?: string): void {
   void (async () => {
     try {
       const me = await (await fetch('/api/auth/me')).json();
+      myFeatures = Array.isArray(me.features) ? me.features : [];
+      remember('features', myFeatures);
+      if (myFeatures.includes('listen')) {
+        const el = document.getElementById('admin-link');
+        if (el && !document.getElementById('listen-btn')) {
+          el.insertAdjacentHTML('afterbegin', `<a href="#" id="listen-btn" aria-label="Listen for a song">${MIC_SVG}<span class="lbl">Listen</span></a>`);
+          document.getElementById('listen-btn')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            void openListen();
+          });
+        }
+        sizeHomeNav();
+      }
       if (me.admin) {
         const el = document.getElementById('admin-link');
         if (el) el.insertAdjacentHTML('beforeend', '<a href="#/admin" aria-label="Users"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg><span class="lbl">Users</span></a>');
@@ -1445,6 +1458,172 @@ function alertLine(text: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Listen: name the song a room is singing
+// ---------------------------------------------------------------------------
+/** Features still being tried out that this person has (from /api/auth/me). */
+let myFeatures: string[] = remembered<string[]>('features', [], (v) => Array.isArray(v));
+
+const MIC_SVG =
+  '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+
+/** How long each recording is before it is sent, and how long to listen in all. */
+const LISTEN_CHUNK_MS = 7000;
+const LISTEN_MAX_MS = 60000;
+
+let listening: { stop: () => void } | null = null;
+
+/** Record the room a few seconds at a time, have each piece transcribed, and
+ *  keep asking the lyric search what song the words so far belong to. Each
+ *  piece is its own complete recording (stopped and restarted): the middle of
+ *  one long recording cannot be decoded on its own. */
+async function openListen(): Promise<void> {
+  document.getElementById('listen')?.remove();
+  const el = document.createElement('div');
+  el.id = 'listen';
+  el.className = 'gear screen-only';
+  el.innerHTML = `
+    <div class="gp-card listen-card" role="dialog" aria-modal="true" aria-label="Listen">
+      <div class="gp-head">
+        <strong>Listen</strong>
+        <button id="ls-close" class="gp-close" aria-label="Stop and close">×</button>
+      </div>
+      <div class="ls-status"><span class="ls-dot"></span><span id="ls-state">Starting the microphone…</span></div>
+      <p id="ls-words" class="ls-words"></p>
+      <ul id="ls-guesses" class="hitlist lib ls-guesses"></ul>
+      <button id="ls-stop" class="gp-clear">Stop listening</button>
+    </div>`;
+  document.body.appendChild(el);
+  const state = (t: string) => {
+    const s = document.getElementById('ls-state');
+    if (s) s.textContent = t;
+  };
+  const close = () => {
+    listening?.stop();
+    el.remove();
+  };
+  document.getElementById('ls-close')?.addEventListener('click', close);
+  el.addEventListener('click', (e) => {
+    if (e.target === el) close();
+  });
+
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      // The room as it is: noise suppression takes singing for noise.
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+    });
+  } catch {
+    state('No microphone. Allow it for this site and try again.');
+    return;
+  }
+  const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+  let live = true;
+  let rec: MediaRecorder | null = null;
+  const stop = () => {
+    if (!live) return;
+    live = false;
+    if (rec && rec.state !== 'inactive') rec.stop();
+    stream.getTracks().forEach((t) => t.stop());
+    el.classList.add('stopped');
+    state('Stopped.');
+    const b = document.getElementById('ls-stop');
+    if (b) b.textContent = 'Listen again';
+  };
+  listening = { stop };
+  document.getElementById('ls-stop')?.addEventListener('click', () => {
+    if (live) stop();
+    else void openListen();
+  });
+
+  const heard: string[] = [];
+  const scores = new Map<string, { t: Suggestion; score: number }>();
+  let asked = 0;
+  const drawGuesses = () => {
+    const ul = document.getElementById('ls-guesses');
+    if (!ul) return;
+    const top = [...scores.values()].sort((a, b) => b.score - a.score).slice(0, 4);
+    ul.innerHTML = top
+      .map(
+        ({ t }, i) => `
+        <li><a href="#" data-guess="${i}">
+          <span class="st"><span class="t">${esc(t.title)}</span><span class="a">${esc(t.artist)}</span></span>
+          ${i === 0 ? '<span class="rt">Best match</span>' : ''}
+        </a></li>`
+      )
+      .join('');
+    ul.querySelectorAll<HTMLElement>('[data-guess]').forEach((a) =>
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const t = top[Number(a.dataset.guess)].t;
+        close();
+        if (location.hash !== '#/' && location.hash !== '') location.hash = '#/';
+        const input = document.getElementById('q') as HTMLInputElement | null;
+        if (input) input.value = `${t.title} ${t.artist}`;
+        void search({ title: t.title, artist: t.artists?.[0] || t.artist.split(',')[0].trim() });
+      })
+    );
+  };
+
+  /** The words so far, to the lyric search; a song that keeps coming back
+   *  climbs, so one lucky phrase does not beat a song the whole room is in. */
+  const guess = async () => {
+    const words = heard.join(' ').split(/\s+/).filter(Boolean);
+    if (words.length < 4) return;
+    const n = ++asked;
+    try {
+      const res = await fetch(`/api/lyrics?q=${encodeURIComponent(words.slice(-24).join(' '))}`);
+      const found: Suggestion[] = (await res.json()).tracks ?? [];
+      found.slice(0, 3).forEach((t, i) => {
+        const k = `${t.title.toLowerCase()}|${(t.artists?.[0] || t.artist).toLowerCase()}`;
+        const cur = scores.get(k) ?? { t, score: 0 };
+        cur.score += 3 - i + (n === asked ? 0.5 : 0);
+        scores.set(k, cur);
+      });
+      drawGuesses();
+    } catch {
+      /* the next piece tries again */
+    }
+  };
+
+  const send = async (blob: Blob, slot: number) => {
+    try {
+      const res = await fetch('/api/listen', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob });
+      if (res.status === 401) return signedOut();
+      const data = await res.json();
+      if (data.error) {
+        state(data.error);
+        return;
+      }
+      heard[slot] = data.text || '';
+      const words = document.getElementById('ls-words');
+      if (words) words.textContent = heard.filter(Boolean).join(' … ') || '(nothing clear yet)';
+      await guess();
+    } catch {
+      /* one lost piece is not worth stopping for */
+    }
+  };
+
+  const started = Date.now();
+  let slot = 0;
+  state('Listening…');
+  while (live && Date.now() - started < LISTEN_MAX_MS) {
+    const piece = await new Promise<Blob | null>((resolve) => {
+      const chunks: Blob[] = [];
+      rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = () => resolve(chunks.length ? new Blob(chunks, { type: rec?.mimeType || mime }) : null);
+      rec.start();
+      window.setTimeout(() => rec && rec.state !== 'inactive' && rec.stop(), LISTEN_CHUNK_MS);
+    });
+    if (piece && piece.size > 2000) void send(piece, slot++);
+  }
+  if (live) {
+    stop();
+    state(scores.size ? 'Done listening. Tap the song.' : 'Could not make out a song. Try closer to the singing.');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Admin
 // ---------------------------------------------------------------------------
 interface Person {
@@ -1479,6 +1658,19 @@ function personRow(p: Person, actions: string): string {
     </li>`;
 }
 
+/** On/off switches for the features still being tried out, per person. */
+function featureToggles(p: Person): string {
+  const f = adminData?.features;
+  if (!f || !p.sub) return '';
+  return f.names
+    .map((name) => {
+      const on = (f.on[name] ?? []).includes(p.sub!);
+      return `<button class="feat${on ? ' on' : ''}" data-feat="${esc(name)}" data-sub="${esc(p.sub!)}" aria-pressed="${on}"
+                title="${on ? 'Switch off' : 'Switch on'} ${esc(name)} for them">${on ? '✓ ' : ''}${esc(name[0].toUpperCase() + name.slice(1))}</button>`;
+    })
+    .join('');
+}
+
 /** Grants made in this session that KV's list may not report back yet. */
 const justSet = new Map<string, Person>();
 /** Removals likewise: KV can keep listing a key it has already deleted. */
@@ -1488,6 +1680,7 @@ let adminData: {
   me?: { sub?: string; name?: string | null; username?: string | null; profile?: Person | null };
   users?: Person[];
   invites?: Person[];
+  features?: { names: string[]; on: Record<string, string[]> };
 } | null = null;
 
 /** Send an action that has ALREADY been drawn as done.
@@ -1623,7 +1816,7 @@ function paintAdmin(): void {
                   .map((p) =>
                     personRow(
                       p,
-                      `${p.status === 'active' ? `<button data-revoke="${esc(p.sub || '')}">Revoke</button>` : `<button data-approve="${esc(p.sub || '')}">Restore</button>`}
+                      `${featureToggles(p)}${p.status === 'active' ? `<button data-revoke="${esc(p.sub || '')}">Revoke</button>` : `<button data-approve="${esc(p.sub || '')}">Restore</button>`}
                        <button class="danger" data-remove="${esc(p.sub || '')}">Remove</button>`
                     )
                   )
@@ -1718,6 +1911,21 @@ function paintAdmin(): void {
     paintAdmin();
   };
 
+  main.querySelectorAll<HTMLButtonElement>('[data-feat]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const name = b.dataset.feat!;
+      const sub = b.dataset.sub!;
+      const on = b.getAttribute('aria-pressed') !== 'true';
+      const f = (adminData ??= {}).features ?? { names: [], on: {} };
+      const list = new Set(f.on[name] ?? []);
+      if (on) list.add(sub);
+      else list.delete(sub);
+      f.on[name] = [...list];
+      adminData.features = f;
+      paintAdmin();
+      void adminPost({ action: 'feature', name, sub, on });
+    })
+  );
   main.querySelectorAll<HTMLElement>('[data-approve]').forEach((b) =>
     b.addEventListener('click', () => {
       localStatus(String(b.dataset.approve), 'active');
@@ -2824,6 +3032,7 @@ function drawSheet(): void {
 function route(): void {
   const h = location.hash || '#/';
   document.getElementById('gear')?.remove();
+  if (listening && !document.getElementById('listen')) listening = null;
   const set = h.match(/^#\/set\/([a-z0-9]{1,24})(?:\/(\d{1,4}))?$/);
   if (set) {
     void renderSet(set[1], Number(set[2] || 0));

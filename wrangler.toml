@@ -9,3 +9,9 @@ pages_build_output_dir = "dist"
 [[kv_namespaces]]
 binding = "CHORDS_USERS"
 id = "d006d4e267ab4e2f85e4516cb2b6a15e"
+
+# Workers AI, for Listen: Whisper transcribes what is being sung, and the words
+# go to the lyric search. Billed per audio minute, and only for people the
+# admin has switched Listen on for.
+[ai]
+binding = "AI"

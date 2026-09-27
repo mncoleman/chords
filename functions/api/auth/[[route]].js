@@ -245,6 +245,26 @@ export async function onRequestGet(ctx) {
   }
 }
 
+/** Features still being tried out, each switched on per person from the Users
+ *  page. The owner always has every one; everyone else only when listed in
+ *  the KV document `features` ({ listen: [sub, ...], ... }). */
+export const FEATURES = ['listen', 'follow'];
+
+export async function readFeatures(env) {
+  const raw = env.CHORDS_USERS ? await env.CHORDS_USERS.get('features') : null;
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function featuresFor(env, sub) {
+  if (String(sub) === String(env.OWNER_SUB)) return [...FEATURES];
+  const map = await readFeatures(env);
+  return FEATURES.filter((f) => Array.isArray(map[f]) && map[f].includes(String(sub)));
+}
+
 async function handle(ctx) {
   const { request, env } = ctx;
   const url = new URL(request.url);
@@ -260,7 +280,13 @@ async function handle(ctx) {
       : false;
     return Response.json(
       payload
-        ? { authed: true, name: payload.name ?? null, role: payload.role ?? null, admin }
+        ? {
+            authed: true,
+            name: payload.name ?? null,
+            role: payload.role ?? null,
+            admin,
+            features: await featuresFor(env, payload.sub),
+          }
         : { authed: false },
       { headers: { 'Cache-Control': 'no-store' } }
     );

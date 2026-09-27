@@ -14,7 +14,7 @@
 // Every route is admin-only. The middleware has already established that the
 // caller has a valid session; this checks that the session says admin.
 
-import { verifyJwt } from './auth/[[route]].js';
+import { verifyJwt, FEATURES, readFeatures } from './auth/[[route]].js';
 
 const SESSION = 'chords_session';
 
@@ -162,6 +162,7 @@ export async function onRequestGet(ctx) {
       profile,
     },
     ownerSub: String(ctx.env.OWNER_SUB || ''),
+    features: { names: FEATURES, on: await readFeatures(ctx.env) },
     users: users.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     pending: pending.sort((a, b) => (a.requestedAt || '').localeCompare(b.requestedAt || '')),
     invites: [
@@ -262,6 +263,18 @@ export async function onRequestPost(ctx) {
   // The owner is granted by OWNER_SUB, not by this list. Editing them here
   // would look like it worked and change nothing.
   if (sub === String(ctx.env.OWNER_SUB)) return json({ error: 'That is the owner' }, 400);
+
+  // Switch a feature that is still being tried out on or off for one person.
+  if (body.action === 'feature') {
+    if (!FEATURES.includes(body.name)) return json({ error: 'Unknown feature' }, 400);
+    const map = await readFeatures(ctx.env);
+    const list = new Set(Array.isArray(map[body.name]) ? map[body.name] : []);
+    if (body.on) list.add(sub);
+    else list.delete(sub);
+    map[body.name] = [...list];
+    await kv.put('features', JSON.stringify(map));
+    return json({ ok: true, features: map });
+  }
 
   if (body.action === 'approve') {
     const raw = await kv.get(`pending:${sub}`);
