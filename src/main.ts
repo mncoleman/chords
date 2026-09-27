@@ -946,10 +946,17 @@ function drawPeeks(): void {
 /** Slide the song on screen and both neighbours together, dx pixels off
  *  centre. The neighbours are pinned to the top of the screen, so the one
  *  coming in shows its own beginning, which is where it opens. */
-function moveTrack(dx: number, animate: boolean, ms = 280): void {
+/** Curves for the set's slide. Release carries on at the finger's speed and
+ *  settles; an arrow press starts from rest, so it eases in as well as out;
+ *  a swipe that did not go far enough settles back softly. */
+const EASE_RELEASE = 'cubic-bezier(0.25, 0.8, 0.25, 1)';
+const EASE_PRESS = 'cubic-bezier(0.45, 0, 0.2, 1)';
+const EASE_SETTLE = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
+
+function moveTrack(dx: number, animate: boolean, ms = 280, curve = EASE_RELEASE): void {
   const cur = main.querySelector<HTMLElement>('.chart:not(.peek)');
   const top = -main.getBoundingClientRect().top;
-  const ease = animate ? `transform ${ms}ms cubic-bezier(0.22, 0.7, 0.2, 1)` : 'none';
+  const ease = animate ? `transform ${ms}ms ${curve}` : 'none';
   if (cur) {
     cur.style.transition = ease;
     cur.style.transform = dx ? `translateX(${dx}px)` : '';
@@ -968,7 +975,7 @@ let sliding = false;
  *  from wherever a finger left them, and the view is swapped for the real one
  *  once the slide ends. The panel that slid in is the same song drawn the same
  *  way, so the swap does not show. */
-function goSet(delta: 1 | -1, fromDx = 0): void {
+function goSet(delta: 1 | -1, fromDx = 0, speed = 0): void {
   if (!setCtx || sliding) return;
   const f = folderById(setCtx.fid);
   const next = setCtx.index + delta;
@@ -984,12 +991,25 @@ function goSet(delta: 1 | -1, fromDx = 0): void {
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return commit();
   sliding = true;
   if (!main.querySelector('.peek')) drawPeeks();
-  // Quicker when a finger has already carried it most of the way.
-  const left = 1 - Math.min(0.8, Math.abs(fromDx) / window.innerWidth);
-  const ms = Math.round(300 * left + 60);
+  const W = window.innerWidth;
+  const remaining = Math.max(0, W - Math.abs(fromDx));
+  let ms: number;
+  let curve: string;
+  if (fromDx === 0 && speed === 0) {
+    // An arrow: from rest, so a gentle start as well as a gentle stop.
+    ms = 460;
+    curve = EASE_PRESS;
+  } else {
+    // A release: carry on at the finger's speed and settle. The curve starts
+    // at about three times its average speed, so the duration that matches
+    // the flick is three times the time the flick would take at that speed.
+    const v = Math.max(Math.abs(speed), 0.6);
+    ms = Math.round(Math.min(480, Math.max(220, (remaining / v) * 3)));
+    curve = EASE_RELEASE;
+  }
   moveTrack(fromDx, false);
   // Next frame, so the starting point is painted before the slide begins.
-  requestAnimationFrame(() => moveTrack(-delta * window.innerWidth, true, ms));
+  requestAnimationFrame(() => moveTrack(-delta * W, true, ms, curve));
   // A timer, not transitionend: a paused tab or an interrupted transition
   // must still land on the next song.
   window.setTimeout(commit, ms + 20);
@@ -1008,10 +1028,21 @@ function wireSwipe(art: HTMLElement): void {
   let active = false;
   let x0 = 0;
   let y0 = 0;
+  let lockX = 0;
   let dx = 0;
-  let t0 = 0;
   let axis: 'x' | 'y' | null = null;
-  const snapBack = () => moveTrack(0, true, 220);
+  /** Recent finger positions, for its speed at the moment it lets go. */
+  let samples: { x: number; t: number }[] = [];
+  let frame = 0;
+  const paint = () => {
+    frame = 0;
+    moveTrack(dx, false);
+  };
+  const snapBack = () => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    moveTrack(0, true, 380, EASE_SETTLE);
+  };
   art.addEventListener(
     'touchstart',
     (e) => {
@@ -1026,8 +1057,8 @@ function wireSwipe(art: HTMLElement): void {
       x0 = e.touches[0].clientX;
       y0 = e.touches[0].clientY;
       dx = 0;
-      t0 = e.timeStamp;
       axis = null;
+      samples = [];
     },
     { passive: true }
   );
@@ -1041,18 +1072,26 @@ function wireSwipe(art: HTMLElement): void {
         if (axis === 'x') snapBack();
         return;
       }
-      const mx = e.touches[0].clientX - x0;
+      const x = e.touches[0].clientX;
+      const mx = x - x0;
       const my = e.touches[0].clientY - y0;
       if (!axis) {
         if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
         axis = Math.abs(mx) > Math.abs(my) ? 'x' : 'y';
+        // Measured from here, so the page does not jump by the few pixels it
+        // took to tell a swipe from a scroll.
+        lockX = x;
       }
       if (axis !== 'x') return;
       if (e.cancelable) e.preventDefault();
       const f = folderById(setCtx.fid);
-      const atEdge = (mx > 0 && setCtx.index === 0) || (mx < 0 && !!f && setCtx.index === f.charts.length - 1);
-      dx = atEdge ? mx / 4 : mx;
-      moveTrack(dx, false);
+      const d = x - lockX;
+      const atEdge = (d > 0 && setCtx.index === 0) || (d < 0 && !!f && setCtx.index === f.charts.length - 1);
+      dx = atEdge ? d / 4 : d;
+      samples.push({ x, t: e.timeStamp });
+      while (samples.length > 2 && e.timeStamp - samples[0].t > 100) samples.shift();
+      // One move per frame, however often the finger reports.
+      if (!frame) frame = requestAnimationFrame(paint);
     },
     { passive: false }
   );
@@ -1060,12 +1099,20 @@ function wireSwipe(art: HTMLElement): void {
     if (!active) return;
     active = false;
     if (axis !== 'x') return;
-    const fast = Math.abs(dx) / Math.max(1, e.timeStamp - t0) > 0.5;
-    const far = Math.abs(dx) > Math.min(110, window.innerWidth * 0.25);
-    const f = setCtx && folderById(setCtx.fid);
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    const a = samples[0];
+    const b = samples[samples.length - 1];
+    const v = a && b && b.t > a.t ? (b.x - a.x) / (b.t - a.t) : 0;
+    // Recent samples only: a finger that stopped before lifting has no speed.
+    const stale = b ? e.timeStamp - b.t > 80 : true;
+    const speed = stale ? 0 : v;
     const delta: 1 | -1 = dx < 0 ? 1 : -1;
+    const flick = Math.abs(speed) > 0.35 && Math.sign(speed) === Math.sign(dx);
+    const far = Math.abs(dx) > window.innerWidth * 0.33;
+    const f = setCtx && folderById(setCtx.fid);
     const next = setCtx ? setCtx.index + delta : -1;
-    if ((far || (fast && Math.abs(dx) > 30)) && f && next >= 0 && next < f.charts.length) return goSet(delta, dx);
+    if ((far || flick) && f && next >= 0 && next < f.charts.length) return goSet(delta, dx, speed);
     snapBack();
   });
   // Cancelled means the system took the touch: back into place, never a turn.

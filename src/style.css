@@ -497,7 +497,8 @@ pre.lyric { color: var(--fg); }
   /* Screen only: on paper the padding printed as a blank page at the end. */
   /* No touch-action here: the swipe claims its own gesture (see wireSwipe),
      and Safari discards the whole rule over a value it does not support. */
-  .chart.inset { padding-bottom: 6rem; }
+  /* Its own layer, so moving it is a composite, not a repaint. */
+  .chart.inset { padding-bottom: 6rem; will-change: transform; backface-visibility: hidden; }
   /* A chart sliding off the side must not make the page scroll sideways. */
   html:has(.chart.inset), body:has(.chart.inset) { overflow-x: clip; overscroll-behavior-x: none; }
   /* The songs either side of the one on screen, waiting just off it. */
