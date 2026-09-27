@@ -37,17 +37,35 @@ const EMPTY = { recents: [], folders: [] };
 
 const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
 
-/** A chart as the library keeps it. Anything else the page sent is dropped. */
-function chartRef(c) {
-  if (!c || !/^\d{1,12}$/.test(String(c.id))) return null;
-  return { id: String(c.id), song: text(c.song, 200), artist: text(c.artist, 200) };
+/** Display settings a set keeps, for the whole set or for one song in it.
+ *  Only known keys with sane values survive; an empty result is dropped. */
+function opts(o) {
+  if (!o || typeof o !== 'object') return undefined;
+  const out = {};
+  if (o.instrument === 'piano' || o.instrument === 'guitar') out.instrument = o.instrument;
+  if (typeof o.numbers === 'boolean') out.numbers = o.numbers;
+  if (typeof o.condensed === 'boolean') out.condensed = o.condensed;
+  if (typeof o.lineHeight === 'number' && o.lineHeight >= 1 && o.lineHeight <= 2) out.lineHeight = o.lineHeight;
+  if (o.columns === 1 || o.columns === 2) out.columns = o.columns;
+  if (Number.isInteger(o.semitones) && o.semitones >= -11 && o.semitones <= 11 && o.semitones !== 0) {
+    out.semitones = o.semitones;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
-function uniqueCharts(list, max) {
+/** A chart as the library keeps it. Anything else the page sent is dropped. */
+function chartRef(c, withOpts) {
+  if (!c || !/^\d{1,12}$/.test(String(c.id))) return null;
+  const r = { id: String(c.id), song: text(c.song, 200), artist: text(c.artist, 200) };
+  const o = withOpts ? opts(c.opts) : undefined;
+  return o ? { ...r, opts: o } : r;
+}
+
+function uniqueCharts(list, max, withOpts = false) {
   const seen = new Set();
   const out = [];
   for (const c of Array.isArray(list) ? list : []) {
-    const r = chartRef(c);
+    const r = chartRef(c, withOpts);
     if (!r || seen.has(r.id)) continue;
     seen.add(r.id);
     out.push(r);
@@ -66,7 +84,8 @@ function clean(body) {
     const name = text(f.name, 60).trim();
     if (!name) continue;
     ids.add(id);
-    folders.push({ id, name, charts: uniqueCharts(f.charts, MAX_PER_FOLDER) });
+    const o = opts(f.opts);
+    folders.push({ id, name, ...(o ? { opts: o } : {}), charts: uniqueCharts(f.charts, MAX_PER_FOLDER, true) });
     if (folders.length >= MAX_FOLDERS) break;
   }
   return { recents: uniqueCharts(body?.recents, MAX_RECENTS), folders };

@@ -280,14 +280,26 @@ function renderHome(msg?: string): void {
 // ---------------------------------------------------------------------------
 // Library: recently opened charts, and folders of saved ones
 // ---------------------------------------------------------------------------
+/** How a chart is shown. A set keeps these for itself and for each song in
+ *  it; a song's own values win over the set's. */
+interface ChartOpts {
+  instrument?: 'piano' | 'guitar';
+  numbers?: boolean;
+  condensed?: boolean;
+  lineHeight?: number;
+  columns?: 1 | 2;
+  semitones?: number;
+}
 interface ChartRef {
   id: string;
   song: string;
   artist: string;
+  opts?: ChartOpts;
 }
 interface Folder {
   id: string;
   name: string;
+  opts?: ChartOpts;
   charts: ChartRef[];
 }
 interface Library {
@@ -317,15 +329,45 @@ let libraryLoading: Promise<void> | null = null;
 /** Send the whole library. KV is eventually consistent, so a server-side
  *  read-modify-write could apply an edit to a copy a minute old. Saves go out
  *  in order, so the last one to land is the last one made. */
+let libraryTimer: number | undefined;
+/** Batched: dragging a song or tapping transpose six times makes six changes
+ *  in a second, and KV takes one write per key per second. The last state is
+ *  what gets sent, and saves still go out in order. */
 function putLibrary(): void {
+  if (libraryTimer === undefined) librarySaving++;
+  window.clearTimeout(libraryTimer);
+  libraryTimer = window.setTimeout(() => {
+    libraryTimer = undefined;
+    sendLibrary();
+  }, 600);
+}
+
+// A change made in the last moments before the app is closed would otherwise
+// sit in the batch and never be sent.
+// iOS can kill a backgrounded home-screen app without a pagehide, so going
+// out of sight counts too.
+function flushLibrary(): void {
+  if (libraryTimer === undefined) return;
+  window.clearTimeout(libraryTimer);
+  libraryTimer = undefined;
+  sendLibrary(true);
+}
+addEventListener('pagehide', flushLibrary);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushLibrary();
+});
+
+function sendLibrary(leaving = false): void {
   const body = JSON.stringify(library);
-  librarySaving++;
   libraryChain = libraryChain
     .then(async () => {
       const res = await fetch('/api/library', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body,
+        // keepalive refuses a body over 64KB; a library that big just takes
+        // its chances like any other request.
+        keepalive: leaving && body.length < 60_000,
       });
       if (res.status === 401) signedOut();
     })
@@ -624,7 +666,27 @@ function drawFolder(id: string, confirmDelete = false): void {
       <section class="panel">
         ${
           f.charts.length
-            ? `<ul class="hitlist lib">${f.charts.map((c) => chartRow(c, 'data-unsave', 'Remove from folder')).join('')}</ul>`
+            ? `<div class="setactions">
+                <a class="setgo" href="#/set/${esc(f.id)}/0">▶ View set</a>
+                <button id="set-pdf" class="setpdf">Save set as PDF</button>
+              </div>
+              <ul class="hitlist lib setlist" id="setlist">${f.charts
+                .map(
+                  (c) => `
+                <li data-id="${esc(c.id)}">
+                  <span class="grip" aria-label="Drag to reorder" title="Drag to reorder">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 12h14M5 16h14"/></svg>
+                  </span>
+                  <a href="#/t/${esc(c.id)}">
+                    <span class="st">
+                      <span class="t">${esc(c.song)}</span>
+                      <span class="a">${esc(c.artist)}</span>
+                    </span>
+                  </a>
+                  <button class="x" data-unsave="${esc(c.id)}" aria-label="Remove from folder" title="Remove from folder">×</button>
+                </li>`
+                )
+                .join('')}</ul>`
             : '<p class="muted small">Empty. Open a chart and use ☆ Save to add it here.</p>'
         }
       </section>
@@ -639,6 +701,9 @@ function drawFolder(id: string, confirmDelete = false): void {
         </div>
       </section>
     </article>`;
+  document.getElementById('set-pdf')?.addEventListener('click', () => void printSet(id));
+  const list = document.getElementById('setlist');
+  if (list) wireReorder(list, id);
   main.querySelectorAll<HTMLButtonElement>('[data-unsave]').forEach((b) =>
     b.addEventListener('click', () => {
       const gone = b.dataset.unsave;
@@ -668,6 +733,571 @@ function drawFolder(id: string, confirmDelete = false): void {
     location.hash = '#/folders';
   });
   document.getElementById('fold-keep')?.addEventListener('click', () => drawFolder(id));
+}
+
+// ---------------------------------------------------------------------------
+// Sets: a folder played through in order
+// ---------------------------------------------------------------------------
+/** The set being played, when there is one. */
+let setCtx: { fid: string; index: number } | null = null;
+let setArrowsHidden = remembered('setArrowsHidden', false, (v) => typeof v === 'boolean');
+
+/** The reader's own settings, as kept for charts opened on their own. */
+function savedPrefs(): Required<ChartOpts> {
+  return {
+    instrument: remembered<'piano' | 'guitar'>('instrument', 'piano', (v) => v === 'piano' || v === 'guitar'),
+    numbers: false,
+    condensed: false,
+    lineHeight: remembered('lineHeight', 1.4, (v) => typeof v === 'number' && v >= 1 && v <= 2),
+    columns: remembered<1 | 2>(
+      'columns',
+      window.matchMedia('(max-width: 640px)').matches ? 1 : 2,
+      (v) => v === 1 || v === 2
+    ),
+    semitones: 0,
+  };
+}
+
+/** A setting changed while a set is open belongs to the set's song, not to the
+ *  reader's everyday preferences. */
+function rememberPref(key: string, value: unknown): void {
+  if (!setCtx) remember(key, value);
+}
+
+/** Leaving a set: back to the everyday settings. */
+function restorePrefs(): void {
+  const p = savedPrefs();
+  instrument = p.instrument;
+  lineHeight = p.lineHeight;
+  columns = p.columns;
+  condensed = false;
+  numbers = false;
+  semitones = 0;
+  setApplied = null;
+}
+
+const setBase = (f: Folder): Required<ChartOpts> => ({ ...savedPrefs(), ...f.opts });
+const songOpts = (f: Folder, c: ChartRef): Required<ChartOpts> => ({ ...setBase(f), ...c.opts });
+
+function currentOpts(): Required<ChartOpts> {
+  return { instrument, numbers, condensed, lineHeight, columns, semitones };
+}
+
+function applyOpts(o: Required<ChartOpts>): void {
+  instrument = o.instrument;
+  numbers = o.numbers && !!effectiveKey();
+  condensed = o.condensed;
+  lineHeight = o.lineHeight;
+  columns = o.columns;
+  semitones = o.semitones;
+}
+
+const OPT_KEYS = ['instrument', 'numbers', 'condensed', 'lineHeight', 'columns', 'semitones'] as const;
+
+/** The settings the song on screen was last shown with by the set itself. */
+let setApplied: Required<ChartOpts> | null = null;
+
+/** Show a song with the set's settings, and note them as the starting point. */
+function applySetOpts(o: Required<ChartOpts>): void {
+  applyOpts(o);
+  setApplied = currentOpts();
+}
+
+/** Whatever the reader has changed on the song on screen is kept as that
+ *  song's own setting. Called on every redraw, so every control saves without
+ *  being told to.
+ *
+ *  Only what was CHANGED here is written. Comparing the whole look against the
+ *  set deleted settings made on another device: the set falls back to each
+ *  device's own preferences, so a phone that defaults to one column read a
+ *  laptop's one-column song as "no different" and wiped it just by showing it. */
+function syncSongOpts(): void {
+  if (!setCtx || !sheet || !setApplied) return;
+  const { fid, index } = setCtx;
+  const f = folderById(fid);
+  const c = f?.charts[index];
+  if (!f || !c || c.id !== String(sheet.id)) return;
+  const base = setBase(f);
+  const cur = currentOpts();
+  const own: Record<string, unknown> = { ...c.opts };
+  let changed = false;
+  for (const k of OPT_KEYS) {
+    if (cur[k] === setApplied[k]) continue;
+    changed = true;
+    if (cur[k] === base[k] && k !== 'semitones') delete own[k];
+    else own[k] = cur[k];
+  }
+  setApplied = cur;
+  if (!changed) return;
+  if (own.semitones === 0) delete own.semitones;
+  const next = Object.keys(own).length ? (own as ChartOpts) : undefined;
+  if (JSON.stringify(next) === JSON.stringify(c.opts)) return;
+  const cid = c.id;
+  mutateLibrary(() => {
+    const g = folderById(fid)?.charts.find((x) => x.id === cid);
+    if (!g) return;
+    if (next) g.opts = next;
+    else delete g.opts;
+  });
+}
+
+/** A song's own settings, other than its key, which is always its own. */
+const hasOwnLook = (c: ChartRef | undefined) =>
+  !!c?.opts && Object.keys(c.opts).some((k) => k !== 'semitones');
+
+async function renderSet(fid: string, index: number, from: -1 | 0 | 1 = 0): Promise<void> {
+  let f = folderById(fid);
+  if (!f || !librarySynced) {
+    await loadLibrary();
+    f = folderById(fid);
+  }
+  if (!f || !f.charts.length) {
+    setCtx = null;
+    document.getElementById('setbar')?.remove();
+    main.innerHTML = `
+      <section class="hero">
+        <h1>${f ? 'This set is empty' : 'No such folder'}</h1>
+        <p><a href="${f ? `#/folders/${esc(f.id)}` : '#/folders'}">← Back</a></p>
+      </section>`;
+    return;
+  }
+  index = Math.max(0, Math.min(f.charts.length - 1, index));
+  setCtx = { fid, index };
+  const ref = f.charts[index];
+  if (!chartCache.has(ref.id)) main.innerHTML = `<p class="muted loading">Loading ${esc(ref.song)}…</p>`;
+  let data: Sheet;
+  try {
+    data = await fetchChart(ref.id);
+  } catch (e) {
+    if (setCtx?.fid !== fid || setCtx.index !== index) return;
+    main.innerHTML = `
+      <section class="hero">
+        <h1>Couldn't load ${esc(ref.song)}</h1>
+        <p class="muted">${esc((e as Error).message)}</p>
+      </section>`;
+    drawSetBar();
+    return;
+  }
+  // A swipe made while this was loading has moved on already.
+  if (setCtx?.fid !== fid || setCtx.index !== index) return;
+  useChart(data);
+  applySetOpts(songOpts(f, ref));
+  document.title = `${data.song} · ${f.name} · chords`;
+  drawSheet();
+  const art = main.querySelector<HTMLElement>('.chart');
+  // Animated, never styled: if the animation does not run (a backgrounded
+  // tab, reduced motion), the chart is simply where it belongs.
+  if (art && from && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    art.animate([{ transform: `translateX(${from * 100}vw)` }, { transform: 'none' }], {
+      duration: 220,
+      easing: 'ease-out',
+    });
+  }
+  // The neighbours, so the next swipe lands on a chart that is already here.
+  for (const n of [index + 1, index - 1]) {
+    const c = f.charts[n];
+    if (c) fetchChart(c.id).catch(() => {});
+  }
+}
+
+/** Move through the set, the chart sliding out the way it was pushed. */
+function goSet(delta: 1 | -1): void {
+  if (!setCtx) return;
+  const f = folderById(setCtx.fid);
+  const next = setCtx.index + delta;
+  if (!f || next < 0 || next >= f.charts.length) return;
+  const { fid } = setCtx;
+  setCtx = { fid, index: next };
+  history.replaceState(null, '', `#/set/${fid}/${next}`);
+  const art = main.querySelector<HTMLElement>('.chart');
+  const go = () => {
+    window.scrollTo(0, 0);
+    void renderSet(fid, next, delta);
+  };
+  if (!art || matchMedia('(prefers-reduced-motion: reduce)').matches) return go();
+  const from = art.style.transform || 'none';
+  art.animate([{ transform: from }, { transform: `translateX(${-delta * 100}vw)` }], {
+    duration: 170,
+    easing: 'ease-in',
+    fill: 'forwards',
+  });
+  // A timer, not the animation's finish: a paused animation would never end.
+  window.setTimeout(go, 170);
+}
+
+/** Follow a sideways finger, and turn the page once it has gone far enough.
+ *  Only sideways: the first few pixels decide, and a vertical drag is left to
+ *  scroll the chart. */
+function wireSwipe(art: HTMLElement): void {
+  let id = -1;
+  let x0 = 0;
+  let y0 = 0;
+  let dx = 0;
+  let t0 = 0;
+  let axis: 'x' | 'y' | null = null;
+  art.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch' || !setCtx) return;
+    if ((e.target as Element).closest('input, .savepop')) return;
+    // A chord line wider than the screen scrolls sideways itself (iPad).
+    const pre = (e.target as Element).closest('pre');
+    if (pre && pre.scrollWidth > pre.clientWidth) return;
+    id = e.pointerId;
+    x0 = e.clientX;
+    y0 = e.clientY;
+    dx = 0;
+    t0 = e.timeStamp;
+    axis = null;
+  });
+  art.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== id || !setCtx) return;
+    const mx = e.clientX - x0;
+    const my = e.clientY - y0;
+    if (!axis) {
+      if (Math.hypot(mx, my) < 10) return;
+      axis = Math.abs(mx) > Math.abs(my) * 1.2 ? 'x' : 'y';
+    }
+    if (axis !== 'x') return;
+    const f = folderById(setCtx.fid);
+    const atEdge = (mx > 0 && setCtx.index === 0) || (mx < 0 && !!f && setCtx.index === f.charts.length - 1);
+    dx = atEdge ? mx / 4 : mx;
+    art.style.transition = 'none';
+    art.style.transform = `translateX(${dx}px)`;
+  });
+  const end = (e: PointerEvent) => {
+    if (e.pointerId !== id) return;
+    id = -1;
+    if (axis !== 'x') return;
+    const fast = Math.abs(dx) / Math.max(1, e.timeStamp - t0) > 0.5;
+    const far = Math.abs(dx) > Math.min(110, window.innerWidth * 0.25);
+    const f = setCtx && folderById(setCtx.fid);
+    const delta: 1 | -1 = dx < 0 ? 1 : -1;
+    const next = setCtx ? setCtx.index + delta : -1;
+    if ((far || (fast && Math.abs(dx) > 30)) && f && next >= 0 && next < f.charts.length) return goSet(delta);
+    art.style.transition = 'transform 0.2s ease-out';
+    art.style.transform = '';
+  };
+  art.addEventListener('pointerup', end);
+  // Cancelled means the browser took the gesture, usually as a scroll: never a
+  // page turn, only back into place.
+  art.addEventListener('pointercancel', (e) => {
+    if (e.pointerId !== id) return;
+    id = -1;
+    art.style.transition = 'transform 0.2s ease-out';
+    art.style.transform = '';
+  });
+}
+
+const GEAR_SVG =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+
+/** The bar along the foot of a set: settings, and the arrows, which fold away. */
+function drawSetBar(): void {
+  document.getElementById('setbar')?.remove();
+  if (!setCtx) return;
+  const f = folderById(setCtx.fid);
+  if (!f) return;
+  const { index } = setCtx;
+  const bar = document.createElement('div');
+  bar.id = 'setbar';
+  bar.className = `setbar screen-only${setArrowsHidden ? ' min' : ''}`;
+  bar.innerHTML = `
+    <button id="set-gear" class="sb-btn" aria-label="Settings for the whole set" title="Settings for the whole set">${GEAR_SVG}</button>
+    <div class="sb-nav" ${setArrowsHidden ? 'aria-hidden="true"' : ''}>
+      <button id="set-prev" class="sb-arrow" aria-label="Previous song" ${index === 0 ? 'disabled' : ''}>‹</button>
+      <span class="sb-pos">${index + 1} / ${f.charts.length}</span>
+      <button id="set-next" class="sb-arrow" aria-label="Next song" ${index === f.charts.length - 1 ? 'disabled' : ''}>›</button>
+    </div>
+    <button id="set-arrows" class="sb-btn" aria-label="${setArrowsHidden ? 'Show arrows' : 'Hide arrows'}"
+            title="${setArrowsHidden ? 'Show arrows' : 'Hide arrows'}">${setArrowsHidden ? '‹›' : '×'}</button>`;
+  document.body.appendChild(bar);
+  document.getElementById('set-prev')?.addEventListener('click', () => goSet(-1));
+  document.getElementById('set-next')?.addEventListener('click', () => goSet(1));
+  document.getElementById('set-gear')?.addEventListener('click', openGear);
+  document.getElementById('set-arrows')?.addEventListener('click', () => {
+    setArrowsHidden = !setArrowsHidden;
+    remember('setArrowsHidden', setArrowsHidden);
+    drawSetBar();
+  });
+}
+
+/** The set's own line above the title: where this is, and a way back. */
+function setLine(): string {
+  if (!setCtx) return '';
+  const f = folderById(setCtx.fid);
+  if (!f) return '';
+  const c = f.charts[setCtx.index];
+  return `
+    <div class="setline screen-only">
+      <a href="#/folders/${esc(f.id)}">${esc(f.name)}</a>
+      <span>· Song ${setCtx.index + 1} of ${f.charts.length}</span>
+      ${
+        hasOwnLook(c)
+          ? '<span>· Own settings</span><button id="set-song-reset" class="linkish" title="Use the set\'s settings for this song (keeps its key)">Reset</button>'
+          : ''
+      }
+    </div>`;
+}
+
+function wireSetChrome(): void {
+  if (!setCtx) return;
+  const art = main.querySelector<HTMLElement>('.chart');
+  if (art) wireSwipe(art);
+  drawSetBar();
+  document.getElementById('set-song-reset')?.addEventListener('click', () => {
+    if (!setCtx) return;
+    const f = folderById(setCtx.fid);
+    const c = f?.charts[setCtx.index];
+    if (!f || !c) return;
+    const keep = c.opts?.semitones;
+    const cid = c.id;
+    mutateLibrary(() => {
+      const g = folderById(f.id)?.charts.find((x) => x.id === cid);
+      if (!g) return;
+      if (keep) g.opts = { semitones: keep };
+      else delete g.opts;
+    });
+    applySetOpts({ ...setBase(f), semitones: keep ?? 0 });
+    drawSheet();
+  });
+}
+
+/** Settings for every song in the set, except where a song has its own. */
+function openGear(): void {
+  if (!setCtx) return;
+  const f = folderById(setCtx.fid);
+  if (!f) return;
+  const fid = f.id;
+  const b = setBase(f);
+  const seg = (name: string, opts: [string, string][], val: string) => `
+    <div class="gp-seg" role="group" aria-label="${esc(name)}">
+      ${opts.map(([v, label]) => `<button data-k="${esc(name)}" data-v="${esc(v)}" class="${v === val ? 'on' : ''}">${label}</button>`).join('')}
+    </div>`;
+  document.getElementById('gear')?.remove();
+  const el = document.createElement('div');
+  el.id = 'gear';
+  el.className = 'gear screen-only';
+  el.innerHTML = `
+    <div class="gp-card" role="dialog" aria-modal="true" aria-label="Set settings">
+      <div class="gp-head">
+        <strong>Set settings</strong>
+        <button id="gp-close" class="gp-close" aria-label="Close">×</button>
+      </div>
+      <p class="gp-note">Every song in ${esc(f.name)} uses these, unless you changed that song on its own.</p>
+      <label class="gp-row"><span>Instrument</span>${seg('instrument', [['piano', '🎹 Piano'], ['guitar', '🎸 Guitar']], b.instrument)}</label>
+      <label class="gp-row"><span>Chords</span>${seg('numbers', [['false', 'Letters'], ['true', 'Numbers']], String(b.numbers))}</label>
+      <label class="gp-row"><span>Length</span>${seg('condensed', [['false', 'Full'], ['true', 'Short']], String(b.condensed))}</label>
+      <label class="gp-row"><span>Columns</span>${seg('columns', [['1', '1'], ['2', '2']], String(b.columns))}</label>
+      <label class="gp-row"><span>Line spacing</span>
+        <input id="gp-lh" type="range" min="1.05" max="1.9" step="0.05" value="${b.lineHeight}" aria-label="Line spacing">
+      </label>
+      <button id="gp-clear" class="gp-clear">Clear every song's own settings (keeps keys)</button>
+    </div>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.addEventListener('click', (e) => {
+    if (e.target === el) close();
+  });
+  document.getElementById('gp-close')?.addEventListener('click', close);
+
+  /** Change the set, then show the song on screen with it, unless the song
+   *  has its own value for that setting. */
+  const setOpt = (patch: ChartOpts, redraw = true) => {
+    mutateLibrary(() => {
+      const g = folderById(fid);
+      if (g) g.opts = { ...g.opts, ...patch };
+    });
+    if (!setCtx || setCtx.fid !== fid) return;
+    const g = folderById(fid)!;
+    const c = g.charts[setCtx.index];
+    const own = { ...c?.opts };
+    applySetOpts({ ...setBase(g), ...own, semitones: semitones });
+    if (redraw) drawSheet();
+  };
+  el.querySelectorAll<HTMLButtonElement>('.gp-seg button').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.k!;
+      const v = btn.dataset.v!;
+      const val = k === 'instrument' ? v : k === 'columns' ? Number(v) : v === 'true';
+      btn.parentElement!.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === btn));
+      setOpt({ [k]: val } as ChartOpts);
+    })
+  );
+  document.getElementById('gp-lh')?.addEventListener('input', (e) => {
+    const lh = Number((e.target as HTMLInputElement).value);
+    setOpt({ lineHeight: lh }, false);
+    main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
+    for (const id of ['lh', 'lh-m']) {
+      const s2 = document.getElementById(id) as HTMLInputElement | null;
+      if (s2) s2.value = String(lineHeight);
+    }
+  });
+  document.getElementById('gp-clear')?.addEventListener('click', () => {
+    mutateLibrary(() => {
+      const g = folderById(fid);
+      if (!g) return;
+      for (const c of g.charts) {
+        const k = c.opts?.semitones;
+        if (k) c.opts = { semitones: k };
+        else delete c.opts;
+      }
+    });
+    if (setCtx?.fid === fid) {
+      applySetOpts({ ...setBase(folderById(fid)!), semitones });
+      drawSheet();
+    }
+  });
+}
+
+// Arrow keys turn the page on a keyboard.
+document.addEventListener('keydown', (e) => {
+  if (!setCtx || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName)) return;
+  if (e.key === 'ArrowRight') goSet(1);
+  else if (e.key === 'ArrowLeft') goSet(-1);
+  else if (e.key === 'Escape') document.getElementById('gear')?.remove();
+});
+
+/** Drag the grip to reorder; the order is saved the moment the song is let go.
+ *  Pointer events rather than HTML drag and drop, which a phone never fires. */
+function wireReorder(list: HTMLElement, fid: string): void {
+  list.querySelectorAll<HTMLElement>('.grip').forEach((grip) =>
+    grip.addEventListener('pointerdown', (e) => {
+      const li = grip.closest('li') as HTMLElement | null;
+      if (!li) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      const grab = e.clientY - li.getBoundingClientRect().top;
+      const before = [...list.children].map((x) => (x as HTMLElement).dataset.id);
+      li.classList.add('dragging');
+      const move = (ev: PointerEvent) => {
+        li.style.transform = '';
+        const h = li.getBoundingClientRect().height;
+        const top = ev.clientY - grab;
+        const mid = (el: Element) => {
+          const r = el.getBoundingClientRect();
+          return r.top + r.height / 2;
+        };
+        for (;;) {
+          const next = li.nextElementSibling;
+          const prev = li.previousElementSibling;
+          if (next && top + h / 2 > mid(next)) list.insertBefore(next, li);
+          else if (prev && top + h / 2 < mid(prev)) list.insertBefore(li, prev);
+          else break;
+        }
+        li.style.transform = `translateY(${top - li.getBoundingClientRect().top}px)`;
+        // Near the edge of the screen, scroll so a long list can be crossed.
+        if (ev.clientY < 70) window.scrollBy(0, -12);
+        else if (ev.clientY > window.innerHeight - 70) window.scrollBy(0, 12);
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        li.classList.remove('dragging');
+        li.style.transform = '';
+        const after = [...list.children].map((x) => (x as HTMLElement).dataset.id);
+        if (after.join() === before.join()) return;
+        mutateLibrary(() => {
+          const g = folderById(fid);
+          if (!g) return;
+          const byId = new Map(g.charts.map((c) => [c.id, c]));
+          const ordered = after.map((id) => byId.get(id!)).filter(Boolean) as ChartRef[];
+          // Anything added meanwhile on another device keeps its place at the end.
+          g.charts = [...ordered, ...g.charts.filter((c) => !after.includes(c.id))];
+        });
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    })
+  );
+}
+
+function toast(text: string | null): void {
+  let el = document.getElementById('toast');
+  if (!text) return el?.remove();
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.className = 'toast screen-only';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+}
+
+/** Every song of the set, each laid out as it prints on its own and with its
+ *  own settings, one after another, then the print dialog, where "Save as
+ *  PDF" makes the file. */
+async function printSet(fid: string): Promise<void> {
+  const f = folderById(fid);
+  if (!f?.charts.length) return;
+  let done = 0;
+  toast(`Preparing ${f.name}… 0 of ${f.charts.length}`);
+  const datas = await Promise.all(
+    f.charts.map((c) =>
+      fetchChart(c.id)
+        .catch(() => null)
+        .finally(() => toast(`Preparing ${f.name}… ${++done} of ${f.charts.length}`))
+    )
+  );
+
+  // Every song is drawn through the same globals the screen uses, so what is
+  // on screen is put back afterwards.
+  const was = { sheet, lines, inferredKey, writtenNumberTonic, ...currentOpts() };
+  clearSetPrint();
+  const wrap = document.createElement('div');
+  wrap.className = 'setprint';
+  document.body.appendChild(wrap);
+  const missing: string[] = [];
+  f.charts.forEach((c, i) => {
+    const data = datas[i];
+    if (!data) return missing.push(c.song);
+    useChart(data);
+    applyOpts(songOpts(f, c));
+    const { headline, body } = chartParts();
+    const art = document.createElement('article');
+    art.className = 'chart';
+    art.innerHTML = `
+      <header class="masthead">
+        <div class="titlerow"><h1>${esc(data.song)}</h1></div>
+        <p class="byline">${esc(data.artist)}</p>
+        ${headline}
+      </header>
+      <div class="sheet${columns === 2 ? ' cols-2' : ''}" style="--lh:${lineHeight}">${body}</div>`;
+    wrap.appendChild(art);
+    paginate(art, lineHeight, columns);
+    if (art.querySelector('.paged')) art.classList.add('paginated');
+  });
+  sheet = was.sheet;
+  lines = was.lines;
+  inferredKey = was.inferredKey;
+  writtenNumberTonic = was.writtenNumberTonic;
+  applyOpts(was);
+  toast(null);
+  if (missing.length) alertLine(`Left out, could not load: ${missing.join(', ')}`);
+
+  document.body.classList.add('set-printing');
+  // The PDF is named after the page title.
+  setPrintTitle = document.title;
+  document.title = `${f.name} (set)`;
+  window.print();
+}
+
+let setPrintTitle: string | null = null;
+
+function clearSetPrint(): void {
+  document.querySelector('.setprint')?.remove();
+  document.body.classList.remove('set-printing');
+  if (setPrintTitle !== null) {
+    document.title = setPrintTitle;
+    setPrintTitle = null;
+  }
+}
+
+/** A line that shows for a few seconds and goes; never a dialog. */
+function alertLine(text: string): void {
+  toast(text);
+  window.setTimeout(() => toast(null), 5000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,22 +1918,42 @@ function renderResults(): void {
     </ul>`;
 }
 
+/** Charts fetched this session. A set flips back and forth between the same
+ *  few, and its PDF needs every one of them at once. */
+const chartCache = new Map<string, Sheet>();
+
+async function fetchChart(id: string): Promise<Sheet> {
+  const hit = chartCache.get(id);
+  if (hit) return hit;
+  const res = await fetch(`/api/ug?id=${encodeURIComponent(id)}`);
+  if (res.status === 401) {
+    signedOut();
+    throw new Error('Not signed in');
+  }
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  chartCache.set(id, data as Sheet);
+  return data as Sheet;
+}
+
+/** Make a fetched chart the current one: parsed, and its key worked out. */
+function useChart(data: Sheet): void {
+  sheet = data;
+  lines = parseSheet(sheet.content);
+  const symbols = lines.flatMap((l) => l.chords.map((c) => c.symbol));
+  inferredKey = sheet.key ? null : inferKey(symbols);
+  writtenNumberTonic = writtenTonic(effectiveKey(), numberCapo(), symbols);
+}
+
 async function renderSheet(id: string): Promise<void> {
   main.innerHTML = `<p class="muted loading">Loading chart…</p>`;
   try {
-    const res = await fetch(`/api/ug?id=${encodeURIComponent(id)}`);
-    if (res.status === 401) return signedOut();
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    sheet = data as Sheet;
-    lines = parseSheet(sheet.content);
-    const symbols = lines.flatMap((l) => l.chords.map((c) => c.symbol));
-    inferredKey = sheet.key ? null : inferKey(symbols);
-    writtenNumberTonic = writtenTonic(effectiveKey(), numberCapo(), symbols);
+    const data = await fetchChart(id);
+    useChart(data);
     semitones = 0;
     numbers = false;
-    document.title = `${sheet.song} — ${sheet.artist} · chords`;
-    recordOpened({ id, song: sheet.song, artist: sheet.artist });
+    document.title = `${data.song} — ${data.artist} · chords`;
+    recordOpened({ id, song: data.song, artist: data.artist });
     drawSheet();
     // The star and folder list are drawn from the device's copy; correct them
     // once the shared one arrives, unless the list is open under a finger.
@@ -1559,8 +2209,8 @@ function printColWidthMm(): number {
  *  Measured, not assumed. It was assumed at 46mm, and a masthead taller than
  *  that overran the first page — so its row of columns, which cannot be split,
  *  moved to the second page and left the first one blank. */
-function mastheadHeightMm(): number {
-  const mast = main.querySelector('.masthead');
+function mastheadHeightMm(article: Element): number {
+  const mast = article.querySelector('.masthead');
   if (!mast) return 0;
   const rig = document.createElement('div');
   // No .chart: its padding would narrow the measure and overstate the height.
@@ -1583,11 +2233,11 @@ function mastheadHeightMm(): number {
  *  Measured rather than estimated: how a lyric wraps inside a 93mm column is
  *  the whole question, and counting characters guesses at it. The rig is a real
  *  element laid out at the real width, just parked off-screen. */
-function measureBlocks(blocks: HTMLElement[]): number[] {
+function measureBlocks(blocks: HTMLElement[], lh: number): number[] {
   const rig = document.createElement('div');
   rig.className = 'sheet rehearse printtype';
   rig.style.width = `${printColWidthMm()}mm`;
-  rig.style.setProperty('--lh', String(lineHeight));
+  rig.style.setProperty('--lh', String(lh));
   const clones = blocks.map((b) => b.cloneNode(true) as HTMLElement);
   for (const c of clones) rig.appendChild(c);
   document.body.appendChild(rig);
@@ -1643,18 +2293,24 @@ function packColumns(heights: number[], mastheadMm: number): number[][][] {
 function buildPrintPages(): void {
   clearPrintPages();
   const article = main.querySelector('.chart');
-  const sheetEl = main.querySelector<HTMLElement>('.sheet');
+  if (article) paginate(article, lineHeight, columns);
+}
+
+/** Lay one chart's sections out as printed pages, inside its own article. A
+ *  set's PDF runs this once per song, each at that song's spacing and columns. */
+function paginate(article: Element, lh: number, cols: 1 | 2): void {
+  const sheetEl = article.querySelector<HTMLElement>('.sheet');
   // One column prints correctly as it is; there is nothing to lay out.
-  if (!article || !sheetEl || columns !== 2) return;
+  if (!sheetEl || cols !== 2) return;
 
   const blocks = [...sheetEl.querySelectorAll<HTMLElement>('.blk')];
   if (!blocks.length) return;
 
-  const heights = measureBlocks(blocks);
-  const mastMm = mastheadHeightMm();
+  const heights = measureBlocks(blocks, lh);
+  const mastMm = mastheadHeightMm(article);
   const paged = document.createElement('div');
   paged.className = 'paged printtype';
-  paged.style.setProperty('--lh', String(lineHeight));
+  paged.style.setProperty('--lh', String(lh));
 
   const pages = packColumns(heights, mastMm);
   // What the packing believed, printed small at the foot of the chart. Paper is
@@ -1701,6 +2357,8 @@ function clearPrintPages(): void {
  *  moment of printing because line spacing, transposition and the chart's own
  *  length can all change between one print and the next. */
 function printChart(): void {
+  // Left over if a set's print never reported back (iOS can skip afterprint).
+  clearSetPrint();
   buildPrintPages();
   window.print();
 }
@@ -1739,37 +2397,13 @@ const lhCtl = (sfx: string) => `
            value="${lineHeight}" aria-label="Line spacing" title="Line spacing">
   </div>`;
 
-function drawSheet(): void {
-  if (!sheet) return;
+/** The printable part of the current chart: the line under the title, and
+ *  the sections. Shared by the chart view and a set's PDF, which draws every
+ *  song of the set this way, each with its own settings. */
+function chartParts(): { headline: string; body: string } {
+  if (!sheet) return { headline: '', body: '' };
   const key = displayedKey();
   const shift = semitones > 0 ? `+${semitones}` : `${semitones}`;
-
-  const toolbar = `
-    <div class="toolbar screen-only">
-      <a class="back" href="#/" title="Back to search">←</a>
-      <div class="ctl">
-        <span class="lbl">Key</span>
-        <strong class="key">${key ? esc(key) : '—'}</strong>
-        <button id="tr-down" aria-label="Transpose down">−</button>
-        <button id="tr-reset" class="shift" ${semitones ? '' : 'disabled'}
-                aria-label="Reset transpose" title="Back to the original key">${shift}</button>
-        <button id="tr-up" aria-label="Transpose up">+</button>
-      </div>
-      <div class="ctl seg">
-        <button id="m-let" class="${numbers ? '' : 'on'}" aria-label="Show chords as letters"><span class="wide">Letters</span><span class="narrow">ABC</span></button>
-        <button id="m-num" class="${numbers ? 'on' : ''}" ${effectiveKey() ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
-      </div>
-      <div class="ctl seg" role="group" aria-label="Chart length">
-        <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
-        <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
-      </div>
-      ${instSeg('')}
-      ${lhCtl('')}
-      ${colSeg('')}
-      <div class="spacer"></div>
-      <button id="print" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
-    </div>`;
-
   const meta = [
     key ? `Key of ${key}${!sheet.key && inferredKey ? ' (detected)' : ''}` : null,
     semitones ? `transposed ${shift}` : null,
@@ -1826,21 +2460,7 @@ function drawSheet(): void {
     .map((blk) => `<section class="blk">${blk.map(renderLine).join('')}</section>`)
     .join('');
 
-  main.innerHTML = `
-    <article class="chart">
-      ${toolbar}
-      <header class="masthead">
-        <div class="mh-tools screen-only">
-          ${instSeg('-m')}
-          ${lhCtl('-m')}
-          ${colSeg('-m')}
-          <button id="print-m" class="primary" aria-label="Print or save as PDF" title="Print or save as PDF">Print</button>
-        </div>
-        <div class="titlerow">
-          <h1>${esc(sheet.song)}</h1>
-          ${saveControl()}
-        </div>
-        <p class="byline">${esc(sheet.artist)}</p>
+  const headline = `
         <div class="headline">
           <div>
             ${meta ? `<p class="meta">${esc(meta)}</p>` : ''}
@@ -1857,7 +2477,62 @@ function drawSheet(): void {
               ? `<div class="facts">${facts.map((f) => `<p class="meta">${esc(f)}</p>`).join('')}</div>`
               : ''
           }
+        </div>`;
+  return { headline, body };
+}
+
+function drawSheet(): void {
+  if (!sheet) return;
+  syncSongOpts();
+  const key = displayedKey();
+  const shift = semitones > 0 ? `+${semitones}` : `${semitones}`;
+
+  const toolbar = `
+    <div class="toolbar screen-only">
+      <a class="back" href="${setCtx ? `#/folders/${esc(setCtx.fid)}` : '#/'}" title="${setCtx ? 'Back to the folder' : 'Back to search'}">←</a>
+      <div class="ctl">
+        <span class="lbl">Key</span>
+        <strong class="key">${key ? esc(key) : '—'}</strong>
+        <button id="tr-down" aria-label="Transpose down">−</button>
+        <button id="tr-reset" class="shift" ${semitones ? '' : 'disabled'}
+                aria-label="Reset transpose" title="Back to the original key">${shift}</button>
+        <button id="tr-up" aria-label="Transpose up">+</button>
+      </div>
+      <div class="ctl seg">
+        <button id="m-let" class="${numbers ? '' : 'on'}" aria-label="Show chords as letters"><span class="wide">Letters</span><span class="narrow">ABC</span></button>
+        <button id="m-num" class="${numbers ? 'on' : ''}" ${effectiveKey() ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
+      </div>
+      <div class="ctl seg" role="group" aria-label="Chart length">
+        <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
+        <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
+      </div>
+      ${instSeg('')}
+      ${lhCtl('')}
+      ${colSeg('')}
+      <div class="spacer"></div>
+      <button id="print" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
+    </div>`;
+
+  const { headline, body } = chartParts();
+
+
+  main.innerHTML = `
+    <article class="chart${setCtx ? ' inset' : ''}">
+      ${toolbar}
+      <header class="masthead">
+        <div class="mh-tools screen-only">
+          ${instSeg('-m')}
+          ${lhCtl('-m')}
+          ${colSeg('-m')}
+          <button id="print-m" class="primary" aria-label="Print or save as PDF" title="Print or save as PDF">Print</button>
         </div>
+        ${setLine()}
+        <div class="titlerow">
+          <h1>${esc(sheet.song)}</h1>
+          ${saveControl()}
+        </div>
+        <p class="byline">${esc(sheet.artist)}</p>
+        ${headline}
       </header>
       <div class="sheet${columns === 2 ? ' cols-2' : ''}" style="--lh:${lineHeight}">${body}</div>
       <footer class="credit">
@@ -1908,7 +2583,8 @@ function drawSheet(): void {
   for (const id of ['lh', 'lh-m']) {
     document.getElementById(id)?.addEventListener('input', (e) => {
       lineHeight = Number((e.target as HTMLInputElement).value);
-      remember('lineHeight', lineHeight);
+      rememberPref('lineHeight', lineHeight);
+      syncSongOpts();
       main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
       for (const other of ['lh', 'lh-m']) {
         const el = document.getElementById(other) as HTMLInputElement | null;
@@ -1921,20 +2597,20 @@ function drawSheet(): void {
       on(`i-${inst}${sfx}`, () => {
         if (instrument === inst) return;
         instrument = inst;
-        remember('instrument', instrument);
+        rememberPref('instrument', instrument);
         drawSheet();
       });
     }
     on(`col-1${sfx}`, () => {
       if (columns === 1) return;
       columns = 1;
-      remember('columns', columns);
+      rememberPref('columns', columns);
       drawSheet();
     });
     on(`col-2${sfx}`, () => {
       if (columns === 2) return;
       columns = 2;
-      remember('columns', columns);
+      rememberPref('columns', columns);
       drawSheet();
     });
   }
@@ -1943,6 +2619,7 @@ function drawSheet(): void {
   on('print', printChart);
   on('print-m', printChart);
   wireSaveControl();
+  wireSetChrome();
 }
 
 // ---------------------------------------------------------------------------
@@ -1950,6 +2627,18 @@ function drawSheet(): void {
 // ---------------------------------------------------------------------------
 function route(): void {
   const h = location.hash || '#/';
+  document.getElementById('gear')?.remove();
+  const set = h.match(/^#\/set\/([a-z0-9]{1,24})(?:\/(\d{1,4}))?$/);
+  if (set) {
+    void renderSet(set[1], Number(set[2] || 0));
+    return;
+  }
+  // Out of a set: its bar and its settings go with it.
+  if (setCtx) {
+    setCtx = null;
+    restorePrefs();
+  }
+  document.getElementById('setbar')?.remove();
   if (h.startsWith('#/admin')) {
     void renderAdmin();
     return;
@@ -1975,8 +2664,14 @@ window.addEventListener('hashchange', route);
 // Print reached by keyboard or by the browser's own menu rather than the app's
 // button. Building twice is harmless — buildPrintPages() clears first — and the
 // pages are cleared afterwards so nothing but the print view ever sees them.
-window.addEventListener('beforeprint', buildPrintPages);
-window.addEventListener('afterprint', clearPrintPages);
+window.addEventListener('beforeprint', () => {
+  // A set's pages are built already, and are all that print.
+  if (!document.body.classList.contains('set-printing')) buildPrintPages();
+});
+window.addEventListener('afterprint', () => {
+  clearPrintPages();
+  clearSetPrint();
+});
 
 // Keep the search a keystroke away from anywhere.
 window.addEventListener('keydown', (ev) => {

@@ -15,6 +15,11 @@
 
 * { box-sizing: border-box; }
 
+/* No scroll bars anywhere: phones overlay their own, and on a desktop the bar
+   is a grey stripe down a page meant to be read. Scrolling still works. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -461,6 +466,112 @@ pre.lyric { color: var(--fg); }
 .hitlist .x:hover { color: var(--fg); background: var(--card); }
 .library .hitlist { margin-top: 0.8rem; }
 .row button.danger { color: #f87171; }
+
+/* --------------------------------------------------------------- sets ---- */
+.setactions { display: flex; gap: 0.6rem; margin: 0.4rem 0 0.2rem; flex-wrap: wrap; }
+.setgo, .setpdf {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 2.9rem; padding: 0 1.3rem; border-radius: 999px;
+  font: inherit; font-size: 0.95rem; font-weight: 600; cursor: pointer;
+}
+.setgo { background: var(--accent); color: var(--bg); border: 0; }
+.setpdf { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
+.setpdf:hover { border-color: var(--accent); }
+/* The grip is always there: any song can be picked up at any time. */
+.setlist .grip {
+  flex: 0 0 auto; display: grid; place-items: center;
+  width: 2.4rem; height: 2.8rem; color: var(--muted);
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.setlist .grip svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.setlist .grip:hover { color: var(--fg); }
+.setlist li.dragging {
+  position: relative; z-index: 3; background: var(--card); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); cursor: grabbing;
+}
+.setlist li.dragging .grip { cursor: grabbing; color: var(--accent); }
+.setlist li a { padding-left: 0.3rem; }
+
+/* A set's chart: room at the foot for the bar, and a hint of where it is. */
+@media screen {
+  /* Screen only: on paper the padding printed as a blank page at the end. */
+  .chart.inset { padding-bottom: 6rem; touch-action: pan-y pinch-zoom; }
+  /* A chart sliding off the side must not make the page scroll sideways. */
+  body:has(.chart.inset) { overflow-x: clip; }
+}
+.setline {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem;
+  margin: 0 0 0.5rem; font-size: 0.82rem; color: var(--muted);
+}
+.setline a { color: var(--accent); }
+.setline .linkish { padding: 0; }
+
+.setbar {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 8;
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 0.25rem; padding: 0.3rem;
+  background: rgba(20, 20, 22, 0.92); border: 1px solid var(--line); border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.setbar button {
+  display: grid; place-items: center; background: none; border: 0; cursor: pointer;
+  color: var(--fg); font: inherit; border-radius: 999px;
+}
+.sb-btn { width: 2.8rem; height: 2.8rem; color: var(--muted) !important; font-size: 1.05rem !important; }
+.sb-btn:hover { color: var(--fg) !important; background: var(--card); }
+.sb-btn svg { width: 1.3rem; height: 1.3rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.sb-nav { display: flex; align-items: center; gap: 0.2rem; overflow: hidden; max-width: 12rem; transition: max-width 0.25s ease, opacity 0.2s; }
+.setbar.min .sb-nav { max-width: 0; opacity: 0; pointer-events: none; }
+.sb-arrow { width: 3.4rem; height: 2.8rem; font-size: 1.9rem !important; line-height: 1; background: var(--card) !important; }
+.sb-arrow:disabled { opacity: 0.3; cursor: default; }
+.sb-pos { min-width: 3.4rem; text-align: center; font-size: 0.86rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* The set's settings, rising from the foot of the screen. */
+.gear {
+  position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.gp-card {
+  width: min(28rem, 100%); padding: 1rem 1.1rem calc(1.2rem + env(safe-area-inset-bottom, 0px));
+  background: var(--card); border: 1px solid var(--line); border-bottom: 0;
+  border-radius: 16px 16px 0 0; box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+  animation: gp-rise 0.22s ease-out;
+}
+@keyframes gp-rise { from { transform: translateY(40px); opacity: 0; } }
+.gp-head { display: flex; align-items: center; justify-content: space-between; }
+.gp-head strong { font-size: 1.05rem; }
+.gp-close { background: none; border: 0; color: var(--muted); font-size: 1.6rem; cursor: pointer; width: 2.4rem; height: 2.4rem; }
+.gp-note { margin: 0.2rem 0 0.9rem; color: var(--muted); font-size: 0.84rem; }
+.gp-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.55rem 0; border-top: 1px solid var(--line); font-size: 0.92rem; }
+.gp-seg { display: flex; border: 1px solid var(--line); border-radius: 10px; padding: 0.15rem; }
+.gp-seg button {
+  background: none; border: 0; color: var(--muted); font: inherit; font-size: 0.86rem;
+  padding: 0.45rem 0.8rem; border-radius: 8px; cursor: pointer; min-width: 2.6rem;
+}
+.gp-seg button.on { background: var(--bg); color: var(--fg); }
+.gp-row input[type='range'] { width: 9rem; accent-color: var(--accent); }
+.gp-clear {
+  width: 100%; margin-top: 0.8rem; padding: 0.7rem; border-radius: 10px; cursor: pointer;
+  background: none; border: 1px solid var(--line); color: var(--muted); font: inherit; font-size: 0.84rem;
+}
+.gp-clear:hover { color: var(--fg); }
+
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 30;
+  top: calc(1rem + env(safe-area-inset-top, 0px));
+  padding: 0.6rem 1rem; border-radius: 999px; font-size: 0.86rem;
+  background: var(--card); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* A set's PDF: only the set prints, one song after another, each on its own
+   first page. */
+.setprint { display: none; }
+@media print {
+  body.set-printing > :not(.setprint) { display: none !important; }
+  body.set-printing .setprint { display: block; }
+  .setprint .chart + .chart { break-before: page; page-break-before: always; }
+}
 
 /* Save sits beside the title; its folder list floats, so opening it moves
    nothing on the chart. */
