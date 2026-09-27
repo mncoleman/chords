@@ -420,7 +420,9 @@ pre.lyric { color: var(--fg); }
   display: none; width: 1.3rem; height: 1.3rem;
   fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round;
 }
-.searchrow:focus-within .homenav,
+/* Focus in the search box itself, not the row: pressing a button focuses the
+   button, which folded it away before the click could land. */
+.hero-search:focus-within + .homenav,
 .searchrow:has(#q:not(:placeholder-shown)) .homenav {
   max-width: 0; margin-left: 0; opacity: 0; pointer-events: none;
 }
