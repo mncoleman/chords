@@ -75,54 +75,63 @@ function qualityOf(suffix: string): 'M' | 'm' | 'd' | '*' {
   return 'M';
 }
 
-/** Guess the key from the chords themselves.
- *
- *  Ultimate Guitar often ships a chart with no tonality set, which used to
- *  leave Nashville numbers greyed out — the numbers need a tonic to count from.
- *  Scoring the chords against all 24 keys recovers one: chords that are
- *  diatonic score, chords that are not cost, and the chords a song starts and
- *  ends on break the ties, since both overwhelmingly tend to be the tonic. */
-export function inferKey(symbols: string[]): string | null {
-  const roots: { pc: number; qual: string }[] = [];
+type Root = { pc: number; qual: string };
+
+/** Chord roots and triad qualities, in order. The bass of a slash chord names an
+ *  inversion, not a root. */
+function rootsOf(symbols: string[]): Root[] {
+  const roots: Root[] = [];
   for (const sym of symbols) {
-    // The bass of a slash chord names an inversion, not a root.
     const m = sym.split('/')[0].match(ROOT_RE);
     if (!m) continue;
     const pc = Note.chroma(m[1]);
     if (pc === undefined) continue;
     roots.push({ pc, qual: qualityOf(m[2]) });
   }
-  if (roots.length < 2) return null;
+  return roots;
+}
 
+/** How well a set of chords sits in one key: chords that are diatonic score,
+ *  chords that are not cost, and the chords a song starts and ends on count
+ *  toward their key, since both overwhelmingly tend to be the tonic. */
+function keyScore(roots: Root[], tonic: number, minor: boolean): number {
+  const scale = minor ? MINOR_SCALE : MAJOR_SCALE;
   const tally = new Map<number, number>();
   for (const r of roots) tally.set(r.pc, (tally.get(r.pc) || 0) + 1);
   const commonest = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  const first = roots[0].pc;
-  const last = roots[roots.length - 1].pc;
+
+  let score = 0;
+  for (const r of roots) {
+    const deg = scale.steps.indexOf(((r.pc - tonic) % 12 + 12) % 12);
+    if (deg < 0) {
+      score -= 1; // out of key
+      continue;
+    }
+    const want = scale.quals[deg];
+    // A minor key almost always borrows the major V (harmonic minor).
+    const ok = r.qual === '*' || r.qual === want || (minor && deg === 4 && r.qual === 'M');
+    score += ok ? 2 : 0.5;
+  }
+  if (roots[roots.length - 1].pc === tonic) score += 3;
+  if (roots[0].pc === tonic) score += 2;
+  if (commonest === tonic) score += 1;
+  return score;
+}
+
+/** Guess the key from the chords themselves.
+ *
+ *  Ultimate Guitar often ships a chart with no tonality set, which used to
+ *  leave Nashville numbers greyed out — the numbers need a tonic to count from.
+ *  Scoring the chords against all 24 keys recovers one. */
+export function inferKey(symbols: string[]): string | null {
+  const roots = rootsOf(symbols);
+  if (roots.length < 2) return null;
 
   let best: { name: string; score: number } | null = null;
 
   for (let tonic = 0; tonic < 12; tonic++) {
-    for (const [scale, minor] of [
-      [MAJOR_SCALE, false],
-      [MINOR_SCALE, true],
-    ] as const) {
-      let score = 0;
-      for (const r of roots) {
-        const deg = scale.steps.indexOf(((r.pc - tonic) % 12 + 12) % 12);
-        if (deg < 0) {
-          score -= 1; // out of key
-          continue;
-        }
-        const want = scale.quals[deg];
-        // A minor key almost always borrows the major V (harmonic minor).
-        const ok = r.qual === '*' || r.qual === want || (minor && deg === 4 && r.qual === 'M');
-        score += ok ? 2 : 0.5;
-      }
-      if (last === tonic) score += 3;
-      if (first === tonic) score += 2;
-      if (commonest === tonic) score += 1;
-
+    for (const minor of [false, true]) {
+      const score = keyScore(roots, tonic, minor);
       if (!best || score > best.score) {
         const name = Note.pitchClass(Note.fromMidi(60 + tonic)) || '';
         best = { name: minor ? `${name}m` : name, score };
@@ -140,17 +149,45 @@ export function keyTonicOf(key: string | null): string | null {
   return m ? m[1] : null;
 }
 
-/** The tonic Nashville numbers count from.
+/** One spelling per pitch class, the way keys are usually named. */
+const TONICS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+/** The tonic Nashville numbers count from, in the frame the chart is written
+ *  in (before any transposition the reader applies).
  *
  *  A capo chart names one key and prints another: UG ships "Key of B · Capo 4"
  *  over shapes of G, Em, D, C. Numbers taken against the sounding key turned an
- *  ordinary 1 6m 5 4 into b6 4m b3 b2, so the capo comes off the key first and
- *  the numbers are read in the frame the chart is written in. Any transposition
- *  the reader has applied moves with it. */
-export function writtenTonic(key: string | null, capo: number, semitones: number): string | null {
+ *  ordinary 1 6m 5 4 into b6 4m b3 b2, so the capo normally comes off the key.
+ *
+ *  But UG is not consistent about which key it names. Plenty of capo charts
+ *  list the key of the shapes, and taking the capo off that as well threw the
+ *  numbers a second time: Shout to the Lord, written in C, counted from G and
+ *  printed "F F6 C" as "b7 b76 4". Some charts name a key that fits neither.
+ *  So the chords decide. The key with the capo off and the key as named are
+ *  both scored against the chart, and so is every other tonic in the same mode;
+ *  UG's readings win ties, the capo-off one first, and only a key that fits the
+ *  chords strictly better overrides them. */
+export function writtenTonic(key: string | null, capo: number, symbols: string[]): string | null {
   const tonic = keyTonicOf(key);
   if (!tonic) return null;
-  return transposeSymbol(tonic, intervalForSemitones(semitones - capo)).split('/')[0];
+  const minor = keyIsMinor(key);
+  const candidates = [
+    ...(capo ? [transposeSymbol(tonic, intervalForSemitones(-capo)).split('/')[0]] : []),
+    tonic,
+  ];
+  const roots = rootsOf(symbols);
+  if (roots.length < 2) return candidates[0];
+
+  let best = { name: candidates[0], score: -Infinity };
+  const consider = (name: string) => {
+    const pc = Note.chroma(name);
+    if (pc === undefined) return;
+    const score = keyScore(roots, pc, minor);
+    if (score > best.score) best = { name, score };
+  };
+  candidates.forEach(consider);
+  for (const name of TONICS) consider(name);
+  return best.name;
 }
 
 /** Whether a key string names a minor key ("Am", "F#m", "Cmin"). */
