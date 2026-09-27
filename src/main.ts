@@ -107,6 +107,8 @@ interface Suggestion {
   artists?: string[];
   year: string | null;
   art: string | null;
+  /** Found by a line of its lyrics rather than by its name. */
+  lyric?: boolean;
 }
 let acItems: Suggestion[] = [];
 /** The typed text the dropdown is currently open for; '' means closed. It is
@@ -1752,16 +1754,35 @@ function paintAdmin(): void {
  *  the chords actually come from. */
 async function suggest(q: string): Promise<void> {
   const seq = ++acSeq;
-  try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    if (res.status === 401) return signedOut();
-    const data = await res.json();
-    if (seq !== acSeq) return; // a later keystroke already won
-    acItems = data.tracks ?? [];
-  } catch {
-    if (seq !== acSeq) return;
-    acItems = [];
-  }
+  const get = async (url: string): Promise<Suggestion[]> => {
+    try {
+      const res = await fetch(url);
+      if (res.status === 401) {
+        signedOut();
+        return [];
+      }
+      return (await res.json()).tracks ?? [];
+    } catch {
+      return [];
+    }
+  };
+  // A remembered line of the words, not only the title. Only once there are a
+  // few words to go on: two words match the lyrics of half the songs ever made.
+  const words = q.split(/\s+/).filter(Boolean).length;
+  const [byName, byLyric] = await Promise.all([
+    get(`/api/search?q=${encodeURIComponent(q)}`),
+    words >= 3 ? get(`/api/lyrics?q=${encodeURIComponent(q)}`) : Promise.resolve([] as Suggestion[]),
+  ]);
+  if (seq !== acSeq) return; // a later keystroke already won
+  const key = (t: Suggestion) => `${t.title.toLowerCase()}|${(t.artists?.[0] || t.artist).toLowerCase()}`;
+  const seen = new Set(byName.map(key));
+  const lyric = byLyric
+    .filter((t) => !seen.has(key(t)))
+    .slice(0, 4)
+    .map((t) => ({ ...t, lyric: true }));
+  // A long phrase is most likely a lyric, and Spotify's guesses at it as a
+  // title are noise; a short one is most likely a title.
+  acItems = words >= 5 ? [...lyric, ...byName] : [...byName, ...lyric];
   acIndex = -1;
   drawAutocomplete();
 }
@@ -1808,7 +1829,7 @@ function drawAutocomplete(): void {
         ${t.art ? `<img src="${esc(t.art)}" alt="" loading="lazy">` : '<span class="noart"></span>'}
         <span class="st">
           <span class="t">${esc(t.title)}</span>
-          <span class="a">${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ''}</span>
+          <span class="a">${t.lyric ? '<span class="lyrictag">Lyric match</span> ' : ''}${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ''}</span>
         </span>
       </li>`
       )
@@ -1993,6 +2014,27 @@ async function search(ask: Ask | string): Promise<void> {
           data = second;
           searchNote = `Nothing for “${a.q}”. Showing ${fixed.label}.`;
         }
+      }
+    }
+
+    // Still nothing, and it reads like a line from the song rather than its
+    // name: find the song by its words and search that.
+    if (!(data.results ?? []).length && a.q && a.q.split(/\s+/).length >= 3) {
+      try {
+        const lr = await fetch(`/api/lyrics?q=${encodeURIComponent(a.q)}`);
+        const top: Suggestion | undefined = lr.ok ? (await lr.json()).tracks?.[0] : undefined;
+        if (seq !== searchSeq) return;
+        if (top) {
+          const ask2: Ask = { title: top.title, artist: top.artists?.[0] || top.artist.split(',')[0].trim() };
+          const third = await (await fetch(askUrl(ask2))).json();
+          if (seq !== searchSeq) return;
+          if ((third.results ?? []).length) {
+            data = third;
+            searchNote = `Nothing titled “${a.q}”. Showing ${top.title} by ${ask2.artist}, found by its lyrics.`;
+          }
+        }
+      } catch {
+        /* the plain "nothing found" stands */
       }
     }
 
