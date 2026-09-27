@@ -232,7 +232,6 @@ function numberMarkup(html: string): string {
 // ---------------------------------------------------------------------------
 function renderHome(msg?: string): void {
   main.innerHTML = `
-    <div class="topbar" id="admin-link"><a href="#/library">Library</a></div>
     <section class="hero">
       <h1 class="wordmark">chords</h1>
       <p class="tag">Search a song. Transpose it, read it in numbers, print it.</p>
@@ -243,6 +242,7 @@ function renderHome(msg?: string): void {
         <button type="submit" aria-label="Search">→</button>
       </form>
       <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
+      <nav class="homenav" id="admin-link"><a href="#/folders">Folders</a></nav>
       ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
       <div id="results" class="results"></div>
       <div id="recents" class="results"></div>
@@ -407,7 +407,7 @@ function saveControl(): string {
           <input id="save-new-name" placeholder="New folder" aria-label="New folder name" maxlength="60">
           <button type="submit">Add</button>
         </form>
-        <p class="small"><a href="#/library">Open library →</a></p>
+        <p class="small"><a href="#/folders">All folders →</a></p>
       </div>
     </div>`;
 }
@@ -466,7 +466,7 @@ document.addEventListener('click', (e) => {
 });
 
 function renderLibrary(folderId?: string): void {
-  document.title = 'Library · chords';
+  document.title = 'Folders · chords';
   const draw = () => (folderId ? drawFolder(folderId) : drawFolders());
   draw();
   void loadLibrary(draw);
@@ -477,7 +477,7 @@ function drawFolders(): void {
     <article class="chart admin library">
       <div class="toolbar screen-only">
         <a class="back" href="#/" title="Back to search">←</a>
-        <strong>Library</strong>
+        <strong>Folders</strong>
         <div class="spacer"></div>
       </div>
       <section class="panel">
@@ -490,7 +490,7 @@ function drawFolders(): void {
             ? `<ul class="hitlist lib">${library.folders
                 .map(
                   (f) => `
-                <li><a href="#/library/${esc(f.id)}">
+                <li><a href="#/folders/${esc(f.id)}">
                   <span class="st"><span class="t">${esc(f.name)}</span></span>
                   <span class="rt">${f.charts.length} ${f.charts.length === 1 ? 'song' : 'songs'}</span>
                 </a></li>`
@@ -517,7 +517,7 @@ function drawFolder(id: string, confirmDelete = false): void {
     main.innerHTML = `
       <section class="hero">
         <h1>No such folder</h1>
-        <p><a href="#/library">← Library</a></p>
+        <p><a href="#/folders">← Folders</a></p>
       </section>`;
     return;
   }
@@ -525,7 +525,7 @@ function drawFolder(id: string, confirmDelete = false): void {
   main.innerHTML = `
     <article class="chart admin library">
       <div class="toolbar screen-only">
-        <a class="back" href="#/library" title="Back to library">←</a>
+        <a class="back" href="#/folders" title="Back to folders">←</a>
         <strong>${esc(f.name)}</strong>
         <div class="spacer"></div>
       </div>
@@ -567,7 +567,7 @@ function drawFolder(id: string, confirmDelete = false): void {
     if (!confirmDelete) return drawFolder(id, true);
     library.folders = library.folders.filter((x) => x.id !== id);
     saveLibrary();
-    location.hash = '#/library';
+    location.hash = '#/folders';
   });
   document.getElementById('fold-keep')?.addEventListener('click', () => drawFolder(id));
 }
@@ -1822,7 +1822,7 @@ function route(): void {
     void renderAdmin();
     return;
   }
-  const lib = h.match(/^#\/library(?:\/([a-z0-9]{1,24}))?$/);
+  const lib = h.match(/^#\/(?:folders|library)(?:\/([a-z0-9]{1,24}))?$/);
   if (lib) {
     renderLibrary(lib[1]);
     return;
