@@ -845,7 +845,7 @@ function syncSongOpts(): void {
 const hasOwnLook = (c: ChartRef | undefined) =>
   !!c?.opts && Object.keys(c.opts).some((k) => k !== 'semitones');
 
-async function renderSet(fid: string, index: number, from: -1 | 0 | 1 = 0): Promise<void> {
+async function renderSet(fid: string, index: number): Promise<void> {
   let f = folderById(fid);
   if (!f || !librarySynced) {
     await loadLibrary();
@@ -884,45 +884,115 @@ async function renderSet(fid: string, index: number, from: -1 | 0 | 1 = 0): Prom
   applySetOpts(songOpts(f, ref));
   document.title = `${data.song} · ${f.name} · chords`;
   drawSheet();
-  const art = main.querySelector<HTMLElement>('.chart');
-  // Animated, never styled: if the animation does not run (a backgrounded
-  // tab, reduced motion), the chart is simply where it belongs.
-  if (art && from && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    art.animate([{ transform: `translateX(${from * 100}vw)` }, { transform: 'none' }], {
-      duration: 220,
-      easing: 'ease-out',
-    });
-  }
-  // The neighbours, so the next swipe lands on a chart that is already here.
+  // The neighbours, so they can be drawn beside this one. Each redraws the
+  // side panels when it lands, unless the set has moved on.
   for (const n of [index + 1, index - 1]) {
     const c = f.charts[n];
-    if (c) fetchChart(c.id).catch(() => {});
+    if (c && !chartCache.has(c.id)) {
+      fetchChart(c.id)
+        .then(() => {
+          if (setCtx?.fid === fid && setCtx.index === index && !sliding) drawPeeks();
+        })
+        .catch(() => {});
+    }
   }
 }
 
-/** Move through the set, the chart sliding out the way it was pushed. */
-function goSet(delta: 1 | -1): void {
+/** The songs either side, drawn inert beside the one on screen, so a swipe
+ *  shows the next song coming in as the current one goes out. */
+function peekArticle(f: Folder, n: number): string {
+  const ref = f.charts[n];
+  const data = chartCache.get(ref.id);
+  if (!data) {
+    return `<article class="chart inset"><p class="muted loading">Loading ${esc(ref.song)}…</p></article>`;
+  }
+  const was = { sheet, lines, inferredKey, writtenNumberTonic, ctx: setCtx, ...currentOpts() };
+  useChart(data);
+  applyOpts(songOpts(f, ref));
+  setCtx = { fid: f.id, index: n };
+  const html = chartArticle();
+  sheet = was.sheet;
+  lines = was.lines;
+  inferredKey = was.inferredKey;
+  writtenNumberTonic = was.writtenNumberTonic;
+  setCtx = was.ctx;
+  applyOpts(was);
+  return html;
+}
+
+function drawPeeks(): void {
+  main.querySelectorAll('.peek').forEach((p) => p.remove());
   if (!setCtx) return;
+  const f = folderById(setCtx.fid);
+  if (!f) return;
+  for (const side of [-1, 1]) {
+    const n = setCtx.index + side;
+    if (n < 0 || n >= f.charts.length) continue;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = peekArticle(f, n).trim();
+    const el = tpl.content.firstElementChild as HTMLElement | null;
+    if (!el) continue;
+    el.classList.add('peek');
+    el.dataset.side = String(side);
+    // A copy of the controls, so its ids must not shadow the real ones.
+    el.querySelectorAll('[id]').forEach((x) => x.removeAttribute('id'));
+    el.setAttribute('aria-hidden', 'true');
+    el.inert = true;
+    main.appendChild(el);
+  }
+  moveTrack(0, false);
+}
+
+/** Slide the song on screen and both neighbours together, dx pixels off
+ *  centre. The neighbours are pinned to the top of the screen, so the one
+ *  coming in shows its own beginning, which is where it opens. */
+function moveTrack(dx: number, animate: boolean, ms = 280): void {
+  const cur = main.querySelector<HTMLElement>('.chart:not(.peek)');
+  const top = -main.getBoundingClientRect().top;
+  const ease = animate ? `transform ${ms}ms cubic-bezier(0.22, 0.7, 0.2, 1)` : 'none';
+  if (cur) {
+    cur.style.transition = ease;
+    cur.style.transform = dx ? `translateX(${dx}px)` : '';
+  }
+  main.querySelectorAll<HTMLElement>('.peek').forEach((p) => {
+    const side = Number(p.dataset.side);
+    p.style.top = `${top}px`;
+    p.style.transition = ease;
+    p.style.transform = `translateX(calc(${side * 100}vw + ${dx}px))`;
+  });
+}
+
+let sliding = false;
+
+/** Move through the set: the song on screen slides out as the next slides in,
+ *  from wherever a finger left them, and the view is swapped for the real one
+ *  once the slide ends. The panel that slid in is the same song drawn the same
+ *  way, so the swap does not show. */
+function goSet(delta: 1 | -1, fromDx = 0): void {
+  if (!setCtx || sliding) return;
   const f = folderById(setCtx.fid);
   const next = setCtx.index + delta;
   if (!f || next < 0 || next >= f.charts.length) return;
   const { fid } = setCtx;
-  setCtx = { fid, index: next };
-  history.replaceState(null, '', `#/set/${fid}/${next}`);
-  const art = main.querySelector<HTMLElement>('.chart');
-  const go = () => {
+  const commit = () => {
+    sliding = false;
+    setCtx = { fid, index: next };
+    history.replaceState(null, '', `#/set/${fid}/${next}`);
     window.scrollTo(0, 0);
-    void renderSet(fid, next, delta);
+    void renderSet(fid, next);
   };
-  if (!art || matchMedia('(prefers-reduced-motion: reduce)').matches) return go();
-  const from = art.style.transform || 'none';
-  art.animate([{ transform: from }, { transform: `translateX(${-delta * 100}vw)` }], {
-    duration: 170,
-    easing: 'ease-in',
-    fill: 'forwards',
-  });
-  // A timer, not the animation's finish: a paused animation would never end.
-  window.setTimeout(go, 170);
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return commit();
+  sliding = true;
+  if (!main.querySelector('.peek')) drawPeeks();
+  // Quicker when a finger has already carried it most of the way.
+  const left = 1 - Math.min(0.8, Math.abs(fromDx) / window.innerWidth);
+  const ms = Math.round(300 * left + 60);
+  moveTrack(fromDx, false);
+  // Next frame, so the starting point is painted before the slide begins.
+  requestAnimationFrame(() => moveTrack(-delta * window.innerWidth, true, ms));
+  // A timer, not transitionend: a paused tab or an interrupted transition
+  // must still land on the next song.
+  window.setTimeout(commit, ms + 20);
 }
 
 /** Follow a sideways finger, and turn the page once it has gone far enough.
@@ -941,15 +1011,12 @@ function wireSwipe(art: HTMLElement): void {
   let dx = 0;
   let t0 = 0;
   let axis: 'x' | 'y' | null = null;
-  const snapBack = () => {
-    art.style.transition = 'transform 0.2s ease-out';
-    art.style.transform = '';
-  };
+  const snapBack = () => moveTrack(0, true, 220);
   art.addEventListener(
     'touchstart',
     (e) => {
       active = false;
-      if (!setCtx || e.touches.length !== 1) return;
+      if (!setCtx || sliding || e.touches.length !== 1) return;
       const t = e.target as Element;
       if (t.closest('input, .savepop')) return;
       // A chord line wider than the screen scrolls sideways itself (iPad).
@@ -985,8 +1052,7 @@ function wireSwipe(art: HTMLElement): void {
       const f = folderById(setCtx.fid);
       const atEdge = (mx > 0 && setCtx.index === 0) || (mx < 0 && !!f && setCtx.index === f.charts.length - 1);
       dx = atEdge ? mx / 4 : mx;
-      art.style.transition = 'none';
-      art.style.transform = `translateX(${dx}px)`;
+      moveTrack(dx, false);
     },
     { passive: false }
   );
@@ -999,7 +1065,7 @@ function wireSwipe(art: HTMLElement): void {
     const f = setCtx && folderById(setCtx.fid);
     const delta: 1 | -1 = dx < 0 ? 1 : -1;
     const next = setCtx ? setCtx.index + delta : -1;
-    if ((far || (fast && Math.abs(dx) > 30)) && f && next >= 0 && next < f.charts.length) return goSet(delta);
+    if ((far || (fast && Math.abs(dx) > 30)) && f && next >= 0 && next < f.charts.length) return goSet(delta, dx);
     snapBack();
   });
   // Cancelled means the system took the touch: back into place, never a turn.
@@ -1066,6 +1132,7 @@ function wireSetChrome(): void {
   const art = main.querySelector<HTMLElement>('.chart');
   if (art) wireSwipe(art);
   drawSetBar();
+  drawPeeks();
   document.getElementById('set-song-reset')?.addEventListener('click', () => {
     if (!setCtx) return;
     const f = folderById(setCtx.fid);
@@ -1111,7 +1178,11 @@ function openGear(): void {
       <label class="gp-row"><span>Length</span>${seg('condensed', [['false', 'Full'], ['true', 'Short']], String(b.condensed))}</label>
       <label class="gp-row"><span>Columns</span>${seg('columns', [['1', '1'], ['2', '2']], String(b.columns))}</label>
       <label class="gp-row"><span>Line spacing</span>
-        <input id="gp-lh" type="range" min="1.05" max="1.9" step="0.05" value="${b.lineHeight}" aria-label="Line spacing">
+        <span class="gp-step">
+          <button id="gp-lh-down" aria-label="Tighter lines">−</button>
+          <span id="gp-lhv">${b.lineHeight.toFixed(1)}</span>
+          <button id="gp-lh-up" aria-label="Looser lines">+</button>
+        </span>
       </label>
       <button id="gp-clear" class="gp-clear">Clear every song's own settings (keeps keys)</button>
     </div>`;
@@ -1145,15 +1216,16 @@ function openGear(): void {
       setOpt({ [k]: val } as ChartOpts);
     })
   );
-  document.getElementById('gp-lh')?.addEventListener('input', (e) => {
-    const lh = Number((e.target as HTMLInputElement).value);
-    setOpt({ lineHeight: lh }, false);
-    main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
-    for (const id of ['lh', 'lh-m']) {
-      const s2 = document.getElementById(id) as HTMLInputElement | null;
-      if (s2) s2.value = String(lineHeight);
-    }
-  });
+  for (const dir of [1, -1] as const) {
+    document.getElementById(`gp-lh-${dir > 0 ? 'up' : 'down'}`)?.addEventListener('click', () => {
+      const g = folderById(fid);
+      if (!g) return;
+      const lh = stepLh(setBase(g).lineHeight, dir);
+      const out = document.getElementById('gp-lhv');
+      if (out) out.textContent = lh.toFixed(1);
+      setOpt({ lineHeight: lh });
+    });
+  }
   document.getElementById('gp-clear')?.addEventListener('click', () => {
     mutateLibrary(() => {
       const g = folderById(fid);
@@ -2413,11 +2485,18 @@ const instSeg = (sfx: string) => `
     <button id="i-guitar${sfx}" class="${instrument === 'guitar' ? 'on' : ''}" title="Guitar: chords as UG prints them, with capo and tab" aria-label="Guitar">🎸</button>
   </div>`;
 
+/** Line spacing is stepped, not slid: a slider was fiddly under a thumb. */
+const LH_MIN = 1;
+const LH_MAX = 1.9;
+const stepLh = (lh: number, dir: 1 | -1) =>
+  Math.round(Math.min(LH_MAX, Math.max(LH_MIN, lh + dir * 0.1)) * 100) / 100;
+
 const lhCtl = (sfx: string) => `
-  <div class="ctl lh">
+  <div class="ctl lh" role="group" aria-label="Line spacing">
     <span class="lbl">Line</span>
-    <input id="lh${sfx}" type="range" min="1.05" max="1.9" step="0.05"
-           value="${lineHeight}" aria-label="Line spacing" title="Line spacing">
+    <button id="lh-down${sfx}" aria-label="Tighter lines" title="Tighter lines" ${lineHeight <= LH_MIN ? 'disabled' : ''}>−</button>
+    <span class="lhv">${lineHeight.toFixed(1)}</span>
+    <button id="lh-up${sfx}" aria-label="Looser lines" title="Looser lines" ${lineHeight >= LH_MAX ? 'disabled' : ''}>+</button>
   </div>`;
 
 /** The printable part of the current chart: the line under the title, and
@@ -2504,9 +2583,11 @@ function chartParts(): { headline: string; body: string } {
   return { headline, body };
 }
 
-function drawSheet(): void {
-  if (!sheet) return;
-  syncSongOpts();
+/** The whole chart view for the current chart, as markup. Also drawn, inert,
+ *  for the songs either side of the one on screen in a set, so a swipe shows
+ *  the next song sliding in rather than a blank. */
+function chartArticle(): string {
+  if (!sheet) return '';
   const key = displayedKey();
   const shift = semitones > 0 ? `+${semitones}` : `${semitones}`;
 
@@ -2539,7 +2620,7 @@ function drawSheet(): void {
   const { headline, body } = chartParts();
 
 
-  main.innerHTML = `
+  return `
     <article class="chart${setCtx ? ' inset' : ''}">
       ${toolbar}
       <header class="masthead">
@@ -2564,6 +2645,12 @@ function drawSheet(): void {
         ${buildLine()}
       </footer>
     </article>`;
+}
+
+function drawSheet(): void {
+  if (!sheet) return;
+  syncSongOpts();
+  main.innerHTML = chartArticle();
 
   const on = (id: string, fn: () => void) =>
     document.getElementById(id)?.addEventListener('click', fn);
@@ -2599,21 +2686,18 @@ function drawSheet(): void {
     condensed = true;
     drawSheet();
   });
-  // Two sliders, one per breakpoint — the toolbar on a desktop, the masthead on
-  // a phone, where that row has no width left. Applied to the element rather
-  // than redrawn: a redraw per tick would take the slider out from under the
-  // pointer mid-drag. The other slider is set too, so they never disagree.
-  for (const id of ['lh', 'lh-m']) {
-    document.getElementById(id)?.addEventListener('input', (e) => {
-      lineHeight = Number((e.target as HTMLInputElement).value);
-      rememberPref('lineHeight', lineHeight);
-      syncSongOpts();
-      main.querySelector<HTMLElement>('.sheet')?.style.setProperty('--lh', String(lineHeight));
-      for (const other of ['lh', 'lh-m']) {
-        const el = document.getElementById(other) as HTMLInputElement | null;
-        if (el && el !== e.target) el.value = String(lineHeight);
-      }
-    });
+  // Two steppers, one per breakpoint: the toolbar on a desktop, the masthead
+  // on a phone, where that row has no width left.
+  for (const sfx of ['', '-m']) {
+    for (const dir of [1, -1] as const) {
+      on(`lh-${dir > 0 ? 'up' : 'down'}${sfx}`, () => {
+        const next = stepLh(lineHeight, dir);
+        if (next === lineHeight) return;
+        lineHeight = next;
+        rememberPref('lineHeight', lineHeight);
+        drawSheet();
+      });
+    }
   }
   for (const sfx of ['', '-m']) {
     for (const inst of ['piano', 'guitar'] as const) {
