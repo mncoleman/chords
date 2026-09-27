@@ -926,46 +926,73 @@ function goSet(delta: 1 | -1): void {
 }
 
 /** Follow a sideways finger, and turn the page once it has gone far enough.
- *  Only sideways: the first few pixels decide, and a vertical drag is left to
- *  scroll the chart. */
+ *
+ *  Touch events, not pointer events. Pointer events leave the gesture to the
+ *  browser unless CSS touch-action forbids it, and Safari dropped the whole
+ *  touch-action rule over one value it does not know ("pinch-zoom"), so iOS
+ *  took every sideways drag as a scroll and cancelled the swipe. A non-passive
+ *  touchmove can claim the gesture itself: once the finger is clearly moving
+ *  sideways, preventDefault stops the page from scrolling under it, while
+ *  vertical drags and pinches are left alone. */
 function wireSwipe(art: HTMLElement): void {
-  let id = -1;
+  let active = false;
   let x0 = 0;
   let y0 = 0;
   let dx = 0;
   let t0 = 0;
   let axis: 'x' | 'y' | null = null;
-  art.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch' || !setCtx) return;
-    if ((e.target as Element).closest('input, .savepop')) return;
-    // A chord line wider than the screen scrolls sideways itself (iPad).
-    const pre = (e.target as Element).closest('pre');
-    if (pre && pre.scrollWidth > pre.clientWidth) return;
-    id = e.pointerId;
-    x0 = e.clientX;
-    y0 = e.clientY;
-    dx = 0;
-    t0 = e.timeStamp;
-    axis = null;
-  });
-  art.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== id || !setCtx) return;
-    const mx = e.clientX - x0;
-    const my = e.clientY - y0;
-    if (!axis) {
-      if (Math.hypot(mx, my) < 10) return;
-      axis = Math.abs(mx) > Math.abs(my) * 1.2 ? 'x' : 'y';
-    }
-    if (axis !== 'x') return;
-    const f = folderById(setCtx.fid);
-    const atEdge = (mx > 0 && setCtx.index === 0) || (mx < 0 && !!f && setCtx.index === f.charts.length - 1);
-    dx = atEdge ? mx / 4 : mx;
-    art.style.transition = 'none';
-    art.style.transform = `translateX(${dx}px)`;
-  });
-  const end = (e: PointerEvent) => {
-    if (e.pointerId !== id) return;
-    id = -1;
+  const snapBack = () => {
+    art.style.transition = 'transform 0.2s ease-out';
+    art.style.transform = '';
+  };
+  art.addEventListener(
+    'touchstart',
+    (e) => {
+      active = false;
+      if (!setCtx || e.touches.length !== 1) return;
+      const t = e.target as Element;
+      if (t.closest('input, .savepop')) return;
+      // A chord line wider than the screen scrolls sideways itself (iPad).
+      const pre = t.closest('pre');
+      if (pre && pre.scrollWidth > pre.clientWidth) return;
+      active = true;
+      x0 = e.touches[0].clientX;
+      y0 = e.touches[0].clientY;
+      dx = 0;
+      t0 = e.timeStamp;
+      axis = null;
+    },
+    { passive: true }
+  );
+  art.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!active || !setCtx) return;
+      // A second finger is a pinch: give it back to the browser.
+      if (e.touches.length !== 1) {
+        active = false;
+        if (axis === 'x') snapBack();
+        return;
+      }
+      const mx = e.touches[0].clientX - x0;
+      const my = e.touches[0].clientY - y0;
+      if (!axis) {
+        if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+        axis = Math.abs(mx) > Math.abs(my) ? 'x' : 'y';
+      }
+      if (axis !== 'x') return;
+      if (e.cancelable) e.preventDefault();
+      const f = folderById(setCtx.fid);
+      const atEdge = (mx > 0 && setCtx.index === 0) || (mx < 0 && !!f && setCtx.index === f.charts.length - 1);
+      dx = atEdge ? mx / 4 : mx;
+      art.style.transition = 'none';
+      art.style.transform = `translateX(${dx}px)`;
+    },
+    { passive: false }
+  );
+  art.addEventListener('touchend', (e) => {
+    if (!active) return;
+    active = false;
     if (axis !== 'x') return;
     const fast = Math.abs(dx) / Math.max(1, e.timeStamp - t0) > 0.5;
     const far = Math.abs(dx) > Math.min(110, window.innerWidth * 0.25);
@@ -973,17 +1000,13 @@ function wireSwipe(art: HTMLElement): void {
     const delta: 1 | -1 = dx < 0 ? 1 : -1;
     const next = setCtx ? setCtx.index + delta : -1;
     if ((far || (fast && Math.abs(dx) > 30)) && f && next >= 0 && next < f.charts.length) return goSet(delta);
-    art.style.transition = 'transform 0.2s ease-out';
-    art.style.transform = '';
-  };
-  art.addEventListener('pointerup', end);
-  // Cancelled means the browser took the gesture, usually as a scroll: never a
-  // page turn, only back into place.
-  art.addEventListener('pointercancel', (e) => {
-    if (e.pointerId !== id) return;
-    id = -1;
-    art.style.transition = 'transform 0.2s ease-out';
-    art.style.transform = '';
+    snapBack();
+  });
+  // Cancelled means the system took the touch: back into place, never a turn.
+  art.addEventListener('touchcancel', () => {
+    if (!active) return;
+    active = false;
+    if (axis === 'x') snapBack();
   });
 }
 

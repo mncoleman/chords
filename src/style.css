@@ -495,9 +495,11 @@ pre.lyric { color: var(--fg); }
 /* A set's chart: room at the foot for the bar, and a hint of where it is. */
 @media screen {
   /* Screen only: on paper the padding printed as a blank page at the end. */
-  .chart.inset { padding-bottom: 6rem; touch-action: pan-y pinch-zoom; }
+  /* No touch-action here: the swipe claims its own gesture (see wireSwipe),
+     and Safari discards the whole rule over a value it does not support. */
+  .chart.inset { padding-bottom: 6rem; }
   /* A chart sliding off the side must not make the page scroll sideways. */
-  body:has(.chart.inset) { overflow-x: clip; }
+  html:has(.chart.inset), body:has(.chart.inset) { overflow-x: clip; overscroll-behavior-x: none; }
 }
 .setline {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem;
