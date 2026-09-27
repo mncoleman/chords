@@ -793,6 +793,24 @@ pre.lyric { color: var(--fg); }
   @page { margin: 14mm 6mm; }
 }
 
+/* -------------------------------------------------------------- follow ---- */
+/* The line being played: marked in the margin, not recoloured, so the chords
+   stay as readable as the rest. */
+.pair.now { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 4px; transition: background 0.3s; }
+.chart:has(.pair.now) .pair[data-li] { cursor: pointer; }
+.followbar {
+  position: fixed; left: 50%; transform: translateX(-50%); z-index: 9;
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.5rem 0.45rem 0.9rem;
+  background: rgba(20, 20, 22, 0.94); border: 1px solid var(--line); border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); font-size: 0.86rem; white-space: nowrap;
+}
+.followbar.inset { bottom: calc(5.4rem + env(safe-area-inset-bottom, 0px)); }
+.fb-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--accent); transition: opacity 0.1s; }
+.fb-text { color: var(--muted); }
+.fb-stop { background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 999px; padding: 0.35rem 0.8rem; font: inherit; font-size: 0.82rem; cursor: pointer; }
+@media print { .pair.now { box-shadow: none; background: none; } }
+
 /* -------------------------------------------------------------- listen ---- */
 .listen-card { min-height: 16rem; }
 .ls-status { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0 0.6rem; color: var(--muted); font-size: 0.9rem; }

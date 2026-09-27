@@ -9,6 +9,7 @@ import {
   writtenTonic,
 } from './music';
 import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
+import { Follower, buildSteps } from './follow';
 
 /** Commit and build time, stamped in by vite. See buildStamp() there. */
 declare const __BUILD__: string;
@@ -998,6 +999,7 @@ function goSet(delta: 1 | -1, fromDx = 0, speed = 0): void {
   const { fid } = setCtx;
   const commit = () => {
     sliding = false;
+    if (follower) stopFollow();
     setCtx = { fid, index: next };
     history.replaceState(null, '', `#/set/${fid}/${next}`);
     window.scrollTo(0, 0);
@@ -1455,6 +1457,122 @@ function clearSetPrint(): void {
 function alertLine(text: string): void {
   toast(text);
   window.setTimeout(() => toast(null), 5000);
+}
+
+// ---------------------------------------------------------------------------
+// Follow: keep the chart up with the playing
+// ---------------------------------------------------------------------------
+let follower: Follower | null = null;
+let followLock: WakeLockSentinel | null = null;
+
+/** The chart's chords in playing order, as they SOUND: written, plus the
+ *  capo (a guitarist plays the shapes with it on; on piano the capo is already
+ *  in what is shown), plus any transposition. */
+function followSteps() {
+  const { chart } = displayedChart();
+  const shift = intervalForSemitones(semitones + (sheet?.capo || 0));
+  const chords: { li: number; symbol: string }[] = [];
+  chart.forEach((l, li) => {
+    for (const c of [...l.chords].sort((a, b) => a.at - b.at)) {
+      if (/^N\.?C\.?$/.test(c.symbol)) continue;
+      chords.push({ li, symbol: transposeSymbol(c.symbol, shift) });
+    }
+  });
+  return buildSteps(chords);
+}
+
+/** Mark the line being played and bring it into the upper part of the screen,
+ *  where the next lines are still in view below it. */
+function showFollowPos(pos: number): void {
+  const steps = followSteps();
+  const step = steps[pos];
+  main.querySelectorAll('.pair.now').forEach((e) => e.classList.remove('now'));
+  if (!step) return;
+  const el = main.querySelector<HTMLElement>(`.chart:not(.peek) .pair[data-li="${step.li}"]`);
+  if (!el) return;
+  el.classList.add('now');
+  const r = el.getBoundingClientRect();
+  const h = window.innerHeight;
+  if (r.top < h * 0.18 || r.top > h * 0.55) {
+    window.scrollTo({ top: window.scrollY + r.top - h * 0.3, behavior: 'smooth' });
+  }
+}
+
+function drawFollowBar(level = 0, heard: string | null = null): void {
+  let bar = document.getElementById('followbar');
+  if (!follower) return bar?.remove();
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'followbar';
+    bar.className = 'followbar screen-only';
+    bar.innerHTML = `
+      <span class="fb-dot"></span>
+      <span class="fb-text"></span>
+      <button id="fb-stop" class="fb-stop">Stop</button>`;
+    document.body.appendChild(bar);
+    document.getElementById('fb-stop')?.addEventListener('click', stopFollow);
+  }
+  bar.classList.toggle('inset', !!setCtx);
+  const text = bar.querySelector('.fb-text');
+  if (text) text.textContent = heard ? `Following · hearing ${heard}` : 'Following · tap a line to jump there';
+  const dot = bar.querySelector<HTMLElement>('.fb-dot');
+  if (dot) dot.style.opacity = String(Math.min(1, 0.25 + level * 25));
+}
+
+async function startFollow(): Promise<void> {
+  if (follower || !sheet) return;
+  // The short version drops the chords of repeated sections, and those are
+  // exactly what there is to follow.
+  if (condensed) condensed = false;
+  const steps = followSteps();
+  if (!steps.length) return;
+  follower = new Follower(steps, showFollowPos, drawFollowBar);
+  try {
+    await follower.start();
+  } catch {
+    follower = null;
+    alertLine('No microphone. Allow it for this site and try again.');
+    return;
+  }
+  try {
+    followLock = (await navigator.wakeLock?.request('screen')) ?? null;
+  } catch {
+    /* the screen may dim; following still works */
+  }
+  drawSheet();
+  drawFollowBar();
+}
+
+function stopFollow(): void {
+  follower?.stop();
+  follower = null;
+  void followLock?.release().catch(() => {});
+  followLock = null;
+  document.getElementById('followbar')?.remove();
+  main.querySelectorAll('.pair.now').forEach((e) => e.classList.remove('now'));
+  if (sheet) drawSheet();
+}
+
+function wireFollow(): void {
+  document.getElementById('follow-btn')?.addEventListener('click', () => {
+    if (follower) stopFollow();
+    else void startFollow();
+  });
+  if (!follower) return;
+  // The chart was redrawn (transposed, a setting changed): same place, new
+  // notes to listen for.
+  follower.setSteps(followSteps());
+  showFollowPos(follower.pos);
+  // A tap on a line puts the place there, for a band that repeats a chorus or
+  // skips a verse.
+  main.querySelectorAll<HTMLElement>('.chart:not(.peek) .pair[data-li]').forEach((el) =>
+    el.addEventListener('click', () => {
+      if (!follower) return;
+      const li = Number(el.dataset.li);
+      const i = followSteps().findIndex((s) => s.li >= li);
+      if (i >= 0) follower.jump(i);
+    })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2796,6 +2914,13 @@ const lhCtl = (sfx: string) => `
     <button id="lh-up${sfx}" aria-label="Looser lines" title="Looser lines" ${lineHeight >= LH_MAX ? 'disabled' : ''}>+</button>
   </div>`;
 
+/** The lines of the current chart as they are shown: tab dropped on piano,
+ *  repeats dropped in the short version, the opening notes lifted out. */
+function displayedChart(): { facts: string[]; chart: SheetLine[] } {
+  const played = instrument === 'piano' ? collapseBlanks(lines.filter((l) => !TAB_LINE_RE.test(l.lyric))) : lines;
+  return splitPreamble(condensed ? condense(played) : played);
+}
+
 /** The printable part of the current chart: the line under the title, and
  *  the sections. Shared by the chart view and a set's PDF, which draws every
  *  song of the set this way, each with its own settings. */
@@ -2826,9 +2951,7 @@ function chartParts(): { headline: string; body: string } {
   const tabUrl = sheet.url && /^https?:\/\//i.test(sheet.url) ? sheet.url : null;
 
   // Tablature is six guitar strings; on piano it is only noise.
-  const played = instrument === 'piano' ? collapseBlanks(lines.filter((l) => !TAB_LINE_RE.test(l.lyric))) : lines;
-  const all = condensed ? condense(played) : played;
-  const { facts, chart } = splitPreamble(all);
+  const { facts, chart } = displayedChart();
 
   const renderLine = (l: SheetLine): string => {
     const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
@@ -2842,7 +2965,7 @@ function chartParts(): { headline: string; body: string } {
     // row is what double-spaced every repeated verse in the short version.
     const cls = `pair${hasUrl(l.lyric) ? ' weblink' : ''}${l.chords.length ? '' : ' bare'}`;
     return `
-      <div class="${cls}">
+      <div class="${cls}" data-li="${chart.indexOf(l)}">
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
           ${row.trim() ? `<pre class="chords">${numberMarkup(esc(row))}</pre>` : ''}
@@ -2931,6 +3054,11 @@ function chartArticle(): string {
         <div class="titlerow">
           <h1>${esc(sheet.song)}</h1>
           ${saveControl()}
+          ${
+            myFeatures.includes('follow')
+              ? `<button id="follow-btn" class="savebtn screen-only${follower ? ' on' : ''}" title="Listen to the playing and keep the chart up with it">${follower ? '■ Stop following' : '♪ Follow'}</button>`
+              : ''
+          }
         </div>
         <p class="byline">${esc(sheet.artist)}</p>
         ${headline}
@@ -3024,6 +3152,7 @@ function drawSheet(): void {
   on('print-m', printChart);
   wireSaveControl();
   wireSetChrome();
+  wireFollow();
 }
 
 // ---------------------------------------------------------------------------
@@ -3032,6 +3161,7 @@ function drawSheet(): void {
 function route(): void {
   const h = location.hash || '#/';
   document.getElementById('gear')?.remove();
+  if (follower) stopFollow();
   if (listening && !document.getElementById('listen')) listening = null;
   const set = h.match(/^#\/set\/([a-z0-9]{1,24})(?:\/(\d{1,4}))?$/);
   if (set) {
