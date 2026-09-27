@@ -230,25 +230,36 @@ function numberMarkup(html: string): string {
 // ---------------------------------------------------------------------------
 // Views
 // ---------------------------------------------------------------------------
+/** The folding buttons' own width, so the fold animates from exactly there.
+ *  A generous fixed max-width spent the first third of the animation
+ *  shrinking space nothing was using, and the fold looked like it lagged. */
+function sizeHomeNav(): void {
+  const nav = document.getElementById('admin-link');
+  if (nav) nav.style.setProperty('--navw', `${nav.scrollWidth}px`);
+}
+
 function renderHome(msg?: string): void {
   main.innerHTML = `
     <section class="hero">
       <h1 class="wordmark">chords</h1>
       <p class="tag">Search a song. Transpose it, read it in numbers, print it.</p>
-      <form class="hero-search" id="hero-form" role="search" autocomplete="off">
-        <input id="q" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
-               role="combobox" aria-expanded="false" aria-autocomplete="list"
-               placeholder="Search for a song…" aria-label="Search for a song">
-        <button type="submit" aria-label="Search">→</button>
-      </form>
+      <div class="searchrow">
+        <form class="hero-search" id="hero-form" role="search" autocomplete="off">
+          <input id="q" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 role="combobox" aria-expanded="false" aria-autocomplete="list"
+                 placeholder="Search songs…" aria-label="Search for a song">
+          <button type="submit" aria-label="Search">→</button>
+        </form>
+        <nav class="homenav" id="admin-link"><a href="#/folders" aria-label="Folders"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">Folders</span></a></nav>
+      </div>
       <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
-      <nav class="homenav" id="admin-link"><a href="#/folders">Folders</a></nav>
       ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
       <div id="results" class="results"></div>
       <div id="recents" class="results"></div>
     </section>
     ${buildLine()}`;
   wireSearch();
+  sizeHomeNav();
   drawRecents();
   void loadLibrary(drawRecents);
   void (async () => {
@@ -256,7 +267,8 @@ function renderHome(msg?: string): void {
       const me = await (await fetch('/api/auth/me')).json();
       if (me.admin) {
         const el = document.getElementById('admin-link');
-        if (el) el.insertAdjacentHTML('beforeend', '<a href="#/admin">Users</a>');
+        if (el) el.insertAdjacentHTML('beforeend', '<a href="#/admin" aria-label="Users"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg><span class="lbl">Users</span></a>');
+        sizeHomeNav();
       }
     } catch {
       /* the link is a convenience; the page works without it */
@@ -292,13 +304,19 @@ let library: Library = remembered<Library>('library', { recents: [], folders: []
  *  than the page, so it is not allowed to overwrite it. */
 let librarySaving = 0;
 let libraryChain: Promise<unknown> = Promise.resolve();
+/** Whether this page has had the server's copy yet. Until it has, the
+ *  device's copy may be stale or empty, and sending it whole would overwrite
+ *  every other device's work: a first chart opened on a new phone saved a
+ *  library with no folders in it. */
+let librarySynced = false;
+/** Changes made before that, replayed onto the server's copy once it lands. */
+let libraryPending: (() => void)[] = [];
+let libraryLoading: Promise<void> | null = null;
 
-/** Change the library here first, then store it. Every change sends the whole
- *  thing: KV is eventually consistent, so a server-side read-modify-write
- *  could apply this edit to a copy a minute old. Saves go out in order, so the
- *  last one to land is the last one made. */
-function saveLibrary(): void {
-  remember('library', library);
+/** Send the whole library. KV is eventually consistent, so a server-side
+ *  read-modify-write could apply an edit to a copy a minute old. Saves go out
+ *  in order, so the last one to land is the last one made. */
+function putLibrary(): void {
   const body = JSON.stringify(library);
   librarySaving++;
   libraryChain = libraryChain
@@ -316,24 +334,48 @@ function saveLibrary(): void {
     .finally(() => librarySaving--);
 }
 
-/** Fetch the shared copy, then redraw whatever shows it. */
-async function loadLibrary(redraw: () => void): Promise<void> {
-  try {
-    const res = await fetch('/api/library');
-    if (res.status === 401) return signedOut();
-    const data = await res.json();
-    if (!isLibrary(data) || librarySaving) return;
-    library = data as Library;
-    remember('library', library);
-    redraw();
-  } catch {
-    /* the device's copy stands */
-  }
+/** Change the library: here at once, and on the server once it is safe to.
+ *  The change is a function, not a finished copy, and looks everything up by
+ *  id, so it can be replayed onto the server's copy if that arrives later. */
+function mutateLibrary(change: () => void): void {
+  change();
+  remember('library', library);
+  if (librarySynced) return putLibrary();
+  libraryPending.push(change);
+  void loadLibrary();
 }
 
+/** Fetch the shared copy, replay anything changed before it came, and redraw
+ *  whatever shows it. */
+function loadLibrary(redraw?: () => void): Promise<void> {
+  libraryLoading ??= (async () => {
+    try {
+      const res = await fetch('/api/library');
+      if (res.status === 401) return signedOut();
+      const data = await res.json();
+      if (!isLibrary(data) || librarySaving) return;
+      library = data as Library;
+      const replay = libraryPending;
+      libraryPending = [];
+      librarySynced = true;
+      for (const change of replay) change();
+      remember('library', library);
+      if (replay.length) putLibrary();
+    } catch {
+      /* the device's copy stands, and nothing is sent until one arrives */
+    } finally {
+      libraryLoading = null;
+    }
+  })();
+  return libraryLoading.then(() => redraw?.());
+}
+
+const folderById = (id: string | undefined) => library.folders.find((x) => x.id === id);
+
 function recordOpened(ref: ChartRef): void {
-  library.recents = [ref, ...library.recents.filter((r) => r.id !== ref.id)].slice(0, 25);
-  saveLibrary();
+  mutateLibrary(() => {
+    library.recents = [ref, ...library.recents.filter((r) => r.id !== ref.id)].slice(0, 25);
+  });
 }
 
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -369,17 +411,24 @@ function drawRecents(): void {
     </ul>`;
   box.querySelectorAll<HTMLButtonElement>('[data-forget]').forEach((b) =>
     b.addEventListener('click', () => {
-      library.recents = library.recents.filter((r) => r.id !== b.dataset.forget);
-      saveLibrary();
+      const gone = b.dataset.forget;
+      mutateLibrary(() => {
+        library.recents = library.recents.filter((r) => r.id !== gone);
+      });
       drawRecents();
     })
   );
   document.getElementById('recents-clear')?.addEventListener('click', () => {
-    library.recents = [];
-    saveLibrary();
+    mutateLibrary(() => {
+      library.recents = [];
+    });
     drawRecents();
   });
 }
+
+/** Whether the Save list is showing its new-folder field. Held here because
+ *  every tick redraws the control. */
+let saveNaming = false;
 
 /** The Save control on a chart: a star that fills once the chart is in any
  *  folder, and a list of folders to tick it into, or a new one to start. */
@@ -392,24 +441,46 @@ function saveControl(): string {
       <button id="save-btn" class="savebtn${saved ? ' on' : ''}" aria-expanded="false"
               title="Save to a folder">${saved ? '★ Saved' : '☆ Save'}</button>
       <div id="save-pop" class="savepop" hidden>
+        <p class="savehead">Save to folder</p>
         ${
           library.folders.length
-            ? `<ul>${library.folders
+            ? `<ul role="group" aria-label="Folders">${library.folders
                 .map((f) => {
                   const inIt = f.charts.some((c) => c.id === id);
-                  return `<li><button data-fold="${esc(f.id)}" class="${inIt ? 'on' : ''}">
-                    <span class="tick">${inIt ? '✓' : ''}</span>${esc(f.name)}</button></li>`;
+                  return `<li><button data-fold="${esc(f.id)}" role="checkbox" aria-checked="${inIt}"
+                            class="${inIt ? 'on' : ''}">
+                    <span class="box" aria-hidden="true">${inIt ? '✓' : ''}</span>
+                    <span class="fname">${esc(f.name)}</span>
+                    <span class="fcount">${f.charts.length}</span>
+                  </button></li>`;
                 })
                 .join('')}</ul>`
-            : '<p class="muted small">No folders yet.</p>'
+            : '<p class="savenone">No folders yet.</p>'
         }
-        <form id="save-new" class="row" autocomplete="off">
-          <input id="save-new-name" placeholder="New folder" aria-label="New folder name" maxlength="60">
-          <button type="submit">Add</button>
-        </form>
-        <p class="small"><a href="#/folders">All folders →</a></p>
+        ${
+          saveNaming
+            ? `<form id="save-new" class="savenew" autocomplete="off">
+                <input id="save-new-name" placeholder="Folder name" aria-label="New folder name" maxlength="60">
+                <button type="submit">Create</button>
+              </form>`
+            : '<button id="save-new-open" class="saveadd"><span class="plus" aria-hidden="true">+</span>New folder</button>'
+        }
+        <a class="saveall" href="#/folders">All folders →</a>
       </div>
     </div>`;
+}
+
+/** Keep the folder list on screen. It hangs from the Save button, which sits
+ *  wherever the title ends; after a long title on a phone it ran off the right
+ *  edge and scrolled the whole page sideways. */
+function placeSavePop(): void {
+  const pop = document.getElementById('save-pop');
+  if (!pop || pop.hidden) return;
+  pop.style.left = '0px';
+  const r = pop.getBoundingClientRect();
+  const edge = 12;
+  const over = r.right - (document.documentElement.clientWidth - edge);
+  if (over > 0) pop.style.left = `${-Math.min(over, r.left - edge)}px`;
 }
 
 function wireSaveControl(): void {
@@ -426,31 +497,49 @@ function wireSaveControl(): void {
     if (open) {
       document.getElementById('save-pop')!.hidden = false;
       document.getElementById('save-btn')!.setAttribute('aria-expanded', 'true');
+      placeSavePop();
     }
   };
   btn.addEventListener('click', () => {
+    // Opened fresh each time, without the field: focusing it on open threw
+    // the phone keyboard up over a list that was only there to tick.
+    if (pop.hidden && saveNaming) {
+      saveNaming = false;
+      return redraw(true);
+    }
     pop.hidden = !pop.hidden;
     btn.setAttribute('aria-expanded', String(!pop.hidden));
-    if (!pop.hidden) document.getElementById('save-new-name')?.focus({ preventScroll: true });
+    placeSavePop();
   });
   pop.querySelectorAll<HTMLButtonElement>('[data-fold]').forEach((b) =>
     b.addEventListener('click', () => {
-      const f = library.folders.find((x) => x.id === b.dataset.fold);
-      if (!f) return;
-      f.charts = f.charts.some((c) => c.id === ref.id)
-        ? f.charts.filter((c) => c.id !== ref.id)
-        : [...f.charts, ref];
-      saveLibrary();
+      const fid = b.dataset.fold;
+      // Tick or untick as the list SHOWED it, so a replay cannot invert it.
+      const add = b.getAttribute('aria-checked') !== 'true';
+      mutateLibrary(() => {
+        const f = folderById(fid);
+        if (!f) return;
+        f.charts = f.charts.filter((c) => c.id !== ref.id);
+        if (add) f.charts.push(ref);
+      });
       redraw(true);
     })
   );
+  document.getElementById('save-new-open')?.addEventListener('click', () => {
+    saveNaming = true;
+    redraw(true);
+    document.getElementById('save-new-name')?.focus();
+  });
   document.getElementById('save-new')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = document.getElementById('save-new-name') as HTMLInputElement;
     const name = input.value.trim().slice(0, 60);
     if (!name) return;
-    library.folders.push({ id: newId(), name, charts: [ref] });
-    saveLibrary();
+    const fid = newId();
+    mutateLibrary(() => {
+      library.folders.push({ id: fid, name, charts: [ref] });
+    });
+    saveNaming = false;
     redraw(true);
   });
 }
@@ -505,8 +594,10 @@ function drawFolders(): void {
     const input = document.getElementById('fold-new-name') as HTMLInputElement;
     const name = input.value.trim().slice(0, 60);
     if (!name) return;
-    library.folders.push({ id: newId(), name, charts: [] });
-    saveLibrary();
+    const fid = newId();
+    mutateLibrary(() => {
+      library.folders.push({ id: fid, name, charts: [] });
+    });
     drawFolders();
   });
 }
@@ -549,8 +640,11 @@ function drawFolder(id: string, confirmDelete = false): void {
     </article>`;
   main.querySelectorAll<HTMLButtonElement>('[data-unsave]').forEach((b) =>
     b.addEventListener('click', () => {
-      f.charts = f.charts.filter((c) => c.id !== b.dataset.unsave);
-      saveLibrary();
+      const gone = b.dataset.unsave;
+      mutateLibrary(() => {
+        const g = folderById(id);
+        if (g) g.charts = g.charts.filter((c) => c.id !== gone);
+      });
       drawFolder(id);
     })
   );
@@ -558,15 +652,18 @@ function drawFolder(id: string, confirmDelete = false): void {
     e.preventDefault();
     const name = (document.getElementById('fold-rename-name') as HTMLInputElement).value.trim().slice(0, 60);
     if (!name || name === f.name) return;
-    f.name = name;
-    saveLibrary();
+    mutateLibrary(() => {
+      const g = folderById(id);
+      if (g) g.name = name;
+    });
     drawFolder(id);
   });
   // Two taps rather than a confirm() dialog: a folder can hold a whole set list.
   document.getElementById('fold-delete')?.addEventListener('click', () => {
     if (!confirmDelete) return drawFolder(id, true);
-    library.folders = library.folders.filter((x) => x.id !== id);
-    saveLibrary();
+    mutateLibrary(() => {
+      library.folders = library.folders.filter((x) => x.id !== id);
+    });
     location.hash = '#/folders';
   });
   document.getElementById('fold-keep')?.addEventListener('click', () => drawFolder(id));
@@ -975,8 +1072,8 @@ function wireSearch(): void {
   const ul = document.getElementById('ac');
   if (!form || !input) return;
 
-  // Ready to type the moment the page opens — that is the whole interaction.
-  input.focus();
+  // Not focused on open: a focused box folds Folders and Users away, so they
+  // would never be seen. A tap, or "/" from anywhere, starts a search.
   if (lastQuery) {
     input.value = lastQuery;
     input.select();
@@ -1182,6 +1279,15 @@ async function renderSheet(id: string): Promise<void> {
     document.title = `${sheet.song} — ${sheet.artist} · chords`;
     recordOpened({ id, song: sheet.song, artist: sheet.artist });
     drawSheet();
+    // The star and folder list are drawn from the device's copy; correct them
+    // once the shared one arrives, unless the list is open under a finger.
+    const shown = sheet;
+    void loadLibrary(() => {
+      const wrap = document.querySelector('.savewrap');
+      if (sheet !== shown || !wrap || !document.getElementById('save-pop')?.hidden) return;
+      wrap.outerHTML = saveControl();
+      wireSaveControl();
+    });
   } catch (e) {
     main.innerHTML = `
       <section class="hero">
