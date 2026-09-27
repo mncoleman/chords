@@ -91,6 +91,11 @@ let columns: 1 | 2 = remembered<1 | 2>(
 /** Line spacing, screen and print alike. What decides whether a chart lands on
  *  one page or two, so it is worth a control rather than a constant. */
 let lineHeight = remembered('lineHeight', 1.4, (v) => typeof v === 'number' && v >= 1 && v <= 2);
+/** Who is reading. UG charts are written for guitar: a capo chart prints the
+ *  shapes a guitarist holds, not the chords that sound, so a pianist reading
+ *  "Capo 4" over G, Em, D, C plays the whole song in the wrong key. Piano
+ *  puts the capo back into the chords and drops what only a guitar can use. */
+let instrument = remembered<'piano' | 'guitar'>('instrument', 'piano', (v) => v === 'piano' || v === 'guitar');
 let searchSeq = 0;
 let lastQuery = '';
 
@@ -158,7 +163,15 @@ function displayedTonic(): string | null {
   return transposeSymbol(tonic, intervalForSemitones(semitones)).split('/')[0];
 }
 
+/** Semitones the chords move so they read as they sound: the capo, on piano. */
+function capoShift(): number {
+  return instrument === 'piano' ? sheet?.capo || 0 : 0;
+}
+
 function displayedKey(): string | null {
+  // On piano the key is the one the chords now sound in, counted from the
+  // chords themselves; UG's own label may name the shapes' key instead.
+  if (capoShift() && numberKey()) return numberKey();
   const t = displayedTonic();
   if (!t) return null;
   return keyIsMinor(effectiveKey()) ? `${t}m` : t;
@@ -182,7 +195,7 @@ function numberCapo(): number {
  *  sounds, moved by any transposition the reader has applied. */
 function numberTonic(): string | null {
   if (!writtenNumberTonic) return null;
-  return transposeSymbol(writtenNumberTonic, intervalForSemitones(semitones)).split('/')[0];
+  return transposeSymbol(writtenNumberTonic, intervalForSemitones(semitones + capoShift())).split('/')[0];
 }
 
 /** That tonic as a key name, for saying so on the header line. */
@@ -194,8 +207,24 @@ function numberKey(): string | null {
 
 function renderSymbol(sym: string): string {
   if (/^N\.?C\.?$/.test(sym)) return sym;
-  const t = transposeSymbol(sym, intervalForSemitones(semitones));
+  const t = transposeSymbol(sym, intervalForSemitones(semitones + capoShift()));
   return numbers ? toNashville(t, numberTonic()) : t;
+}
+
+/** A number's chord type set small and raised, and a real flat sign: "b76"
+ *  read as flat seventy-six when it is the 6 chord on the flat 7. Applied to
+ *  escaped HTML after layout, and every glyph keeps one column (see .acc and
+ *  .q in the CSS) so the <pre> rows stay aligned. */
+const NUM_RE = /(^|\s)([b#]?)([1-7])(m(?!aj))?([^\s/]*)(?:\/([b#]?)([1-7]))?(?=\s|$)/g;
+function numberMarkup(html: string): string {
+  if (!numbers) return html;
+  const acc = (a: string) => (a ? `<span class="acc">${a === 'b' ? '♭' : '♯'}</span>` : '');
+  return html.replace(
+    NUM_RE,
+    (_, lead, a, deg, minor = '', q, ba, bdeg) =>
+      `${lead}${acc(a)}${deg}${minor}${q ? `<span class="q">${q}</span>` : ''}` +
+      (bdeg ? `/${acc(ba)}${bdeg}` : '')
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +923,11 @@ function condense(all: SheetLine[]): SheetLine[] {
     out.push({ section: l.section, chords: [], lyric: l.lyric });
   }
 
-  // Condensing leaves runs of blank lines behind; collapse them.
+  return collapseBlanks(out);
+}
+
+/** Dropping lines leaves runs of blank lines behind; collapse them. */
+function collapseBlanks(out: SheetLine[]): SheetLine[] {
   return out.filter(
     (l, i) =>
       l.section ||
@@ -962,7 +995,7 @@ function renderFlow(cells: Cell[]): string {
   return cells
     .map(
       (c) =>
-        `<span class="cw"><span class="cc">${c.chord ? esc(c.chord) : ''}</span>` +
+        `<span class="cw"><span class="cc">${c.chord ? numberMarkup(esc(c.chord)) : ''}</span>` +
         `<span class="ct">${escLinks(c.text)}</span></span>`
     )
     .join('');
@@ -1261,6 +1294,12 @@ const colSeg = (sfx: string) => `
     <button id="col-2${sfx}" class="${columns === 2 ? 'on' : ''}" title="Two columns">2</button>
   </div>`;
 
+const instSeg = (sfx: string) => `
+  <div class="ctl seg inst" role="group" aria-label="Instrument">
+    <button id="i-piano${sfx}" class="${instrument === 'piano' ? 'on' : ''}" title="Piano: chords as they sound, no capo or tab" aria-label="Piano">🎹</button>
+    <button id="i-guitar${sfx}" class="${instrument === 'guitar' ? 'on' : ''}" title="Guitar: chords as UG prints them, with capo and tab" aria-label="Guitar">🎸</button>
+  </div>`;
+
 const lhCtl = (sfx: string) => `
   <div class="ctl lh">
     <span class="lbl">Line</span>
@@ -1292,6 +1331,7 @@ function drawSheet(): void {
         <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
         <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
       </div>
+      ${instSeg('')}
       ${lhCtl('')}
       ${colSeg('')}
       <div class="spacer"></div>
@@ -1309,8 +1349,9 @@ function drawSheet(): void {
         ? `Nashville numbers from ${numberKey()}`
         : 'Nashville numbers'
       : null,
-    sheet.capo ? `Capo ${sheet.capo}` : null,
-    sheet.tuning ? `Tuning ${sheet.tuning}` : null,
+    // On piano the capo is already in the chords, and tuning means nothing.
+    sheet.capo && instrument === 'guitar' ? `Capo ${sheet.capo}` : null,
+    sheet.tuning && instrument === 'guitar' ? `Tuning ${sheet.tuning}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -1319,7 +1360,9 @@ function drawSheet(): void {
   // URL is offered as a link — anything else is not something to point at.
   const tabUrl = sheet.url && /^https?:\/\//i.test(sheet.url) ? sheet.url : null;
 
-  const all = condensed ? condense(lines) : lines;
+  // Tablature is six guitar strings; on piano it is only noise.
+  const played = instrument === 'piano' ? collapseBlanks(lines.filter((l) => !TAB_LINE_RE.test(l.lyric))) : lines;
+  const all = condensed ? condense(played) : played;
   const { facts, chart } = splitPreamble(all);
 
   const renderLine = (l: SheetLine): string => {
@@ -1337,7 +1380,7 @@ function drawSheet(): void {
       <div class="${cls}">
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
-          ${row.trim() ? `<pre class="chords">${esc(row)}</pre>` : ''}
+          ${row.trim() ? `<pre class="chords">${numberMarkup(esc(row))}</pre>` : ''}
           ${l.lyric.trim() ? `<pre class="lyric">${escLinks(l.lyric)}</pre>` : ''}
         </div>
         <div class="flow">${flow}</div>
@@ -1356,9 +1399,10 @@ function drawSheet(): void {
       ${toolbar}
       <header class="masthead">
         <div class="mh-tools screen-only">
+          ${instSeg('-m')}
           ${lhCtl('-m')}
           ${colSeg('-m')}
-          <button id="print-m" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
+          <button id="print-m" class="primary" aria-label="Print or save as PDF" title="Print or save as PDF">Print</button>
         </div>
         <h1>${esc(sheet.song)}</h1>
         <p class="byline">${esc(sheet.artist)}</p>
@@ -1438,6 +1482,14 @@ function drawSheet(): void {
     });
   }
   for (const sfx of ['', '-m']) {
+    for (const inst of ['piano', 'guitar'] as const) {
+      on(`i-${inst}${sfx}`, () => {
+        if (instrument === inst) return;
+        instrument = inst;
+        remember('instrument', instrument);
+        drawSheet();
+      });
+    }
     on(`col-1${sfx}`, () => {
       if (columns === 1) return;
       columns = 1;

@@ -121,6 +121,9 @@ a { color: inherit; text-decoration: none; }
 }
 .ctl .lbl { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .ctl .key { font-family: var(--mono); }
+/* 1 and 2 beside a chart say what they are, and the word cost the toolbar the
+   width the instrument toggle needs to keep Print on the same row. */
+.toolbar .ctl.cols .lbl { display: none; }
 /* The semitone readout doubles as the reset control — one less button on a row
    that had no room for it. */
 .ctl .shift {
@@ -211,7 +214,7 @@ a { color: inherit; text-decoration: none; }
      that scrolls does not have to be made to fit anything. Columns goes for the
      same reason — two of them do not fit a phone, so the choice is not real —
      and with both gone the row fits again instead of wrapping to two. */
-  .toolbar .ctl.lh, .toolbar .ctl.cols { display: none; }
+  .toolbar .ctl.lh, .toolbar .ctl.cols, .toolbar .ctl.inst { display: none; }
 
   /* The chart is the point; the header should not cost half the screen. */
   /* The masthead's own phone rules live below, after its base styling — same
@@ -251,9 +254,12 @@ a { color: inherit; text-decoration: none; }
 @media screen and (max-width: 640px) {
   .mh-tools {
     display: flex; align-items: center; justify-content: flex-end;
+    /* With the instrument toggle it only just fits a 375 phone; narrower ones
+       take a second row rather than crushing Print into three lines. */
+    flex-wrap: wrap;
     gap: 0.5rem; margin-bottom: 0.7rem;
   }
-  .masthead #print-m { display: block; margin: 0; }
+  .masthead #print-m { display: block; margin: 0; white-space: nowrap; }
   /* Labels are dropped from the toolbar for width; here there is room, and a
      bare slider says nothing about what it does. */
   .mh-tools .ctl .lbl { display: inline; }
@@ -357,6 +363,13 @@ a.ext:hover { color: var(--fg); }
 }
 pre.chords, pre.lyric { margin: 0; font-family: var(--mono); white-space: pre; overflow-x: auto; }
 pre.chords { color: var(--accent); font-weight: 600; }
+/* Nashville numbers: a real flat sign, and the chord type set small and raised
+   so "b76" reads as the 6 chord on the flat 7. Both hold one monospace column
+   per character, so a <pre> chord row still lines up over its lyric: the flat
+   may come from a fallback font, and the smaller type is spaced back out. */
+.acc { display: inline-block; font-size: 1.25em; line-height: 1; width: calc(1ch / 1.25); text-align: center; }
+.q { font-size: 0.72em; position: relative; top: -0.4em; }
+pre.chords .q { letter-spacing: calc(1ch / 0.72 - 1ch); }
 pre.lyric { color: var(--fg); }
 
 .credit {
