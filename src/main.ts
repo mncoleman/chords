@@ -248,6 +248,7 @@ function renderHome(msg?: string): void {
           <input id="q" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
                  role="combobox" aria-expanded="false" aria-autocomplete="list"
                  placeholder="Search songs…" aria-label="Search for a song">
+          <button type="button" id="q-clear" class="qclear" aria-label="Clear search" title="Clear">×</button>
           <button type="submit" aria-label="Search">→</button>
         </form>
         <nav class="homenav" id="admin-link"><a href="#/folders" aria-label="Folders"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">Folders</span></a></nav>
@@ -1079,7 +1080,32 @@ function wireSearch(): void {
     input.select();
   }
 
+  /** Back to an empty box: the results go with the words, and the recent
+   *  charts come back. A search still in flight is dropped when it lands. */
+  const clearSearch = () => {
+    input.value = '';
+    window.clearTimeout(acTimer);
+    searchSeq++;
+    hits = [];
+    lastQuery = '';
+    searchNote = null;
+    closeAutocomplete();
+    const box = document.getElementById('results');
+    if (box) box.innerHTML = '';
+    drawRecents();
+  };
+
+  // Its own clear button: the browser's only exists on desktop, and it left
+  // the results behind. Held on press so the box keeps focus and stays wide.
+  const clear = document.getElementById('q-clear');
+  clear?.addEventListener('pointerdown', (ev) => ev.preventDefault());
+  clear?.addEventListener('click', () => {
+    clearSearch();
+    input.focus();
+  });
+
   input.addEventListener('input', () => {
+    if (!input.value) return clearSearch();
     const q = input.value.trim();
     window.clearTimeout(acTimer);
     if (q.length < 2) {

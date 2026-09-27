@@ -83,6 +83,11 @@ a { color: inherit; text-decoration: none; }
   cursor: pointer;
 }
 .hero-search button:hover { color: var(--accent); }
+/* One clear button everywhere: the browser's own shows on desktop only. */
+.hero-search input::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+.hero-search .qclear { padding: 0 0.4rem; font-size: 1.5rem; line-height: 1; }
+.hero-search .qclear:hover { color: var(--fg); }
+.hero-search:has(#q:placeholder-shown) .qclear { display: none; }
 
 .note { margin-top: 1rem; }
 .results { width: min(640px, 100%); margin-top: 1.75rem; text-align: left; }
