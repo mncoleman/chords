@@ -1220,7 +1220,6 @@ function buildPrintPages(): void {
     Math.round(Math.max(...p.map((col) => col.reduce((sum, i) => sum + heights[i], 0))) / MM)
   );
 
-  const fullMm = PAPER_H - VERT_MM - SLACK_MM;
   for (const [n, page] of pages.entries()) {
     const pageEl = document.createElement('div');
     pageEl.className = 'ppage';
@@ -1241,18 +1240,6 @@ function buildPrintPages(): void {
     }
     paged.appendChild(pageEl);
   }
-
-  // Inside the first page box, not after the last one: after the last box it
-  // fell past the end of the document and never printed, on either of the two
-  // PDFs it was supposed to explain.
-  const note = document.createElement('p');
-  note.className = 'packinfo';
-  note.textContent =
-    `pack ${blocks.length} sections · col ${printColWidthMm().toFixed(0)}mm · ` +
-    `masthead ${mastMm.toFixed(0)}mm · budget ${(fullMm - mastMm).toFixed(0)}/${fullMm.toFixed(0)}mm · ` +
-    `boxes ${tallest.map((h) => h + 2).join('/')}mm · ` +
-    `safety ${MEASURE_SAFETY} · cols ${tallest.map((h, i) => `${i + 1}:${h}mm`).join(' ')} · lh ${lineHeight}`;
-  paged.firstElementChild?.appendChild(note);
 
   article.appendChild(paged);
   // A class rather than a sibling selector, so the rule that hides the original

@@ -499,14 +499,6 @@ pre.lyric { color: var(--fg); }
   .paged .flow { display: block !important; }
   .paged .cc { color: #000 !important; }
 
-  /* Temporary. What the packing assumed, so the sheet that comes out of the
-     printer can be held against it — the one measurement that cannot be taken
-     from this side. Remove once the numbers are trusted. */
-  .packinfo {
-    position: absolute; bottom: 0; left: 0; right: 0;
-    margin: 0; font-family: monospace; font-size: 6pt; color: #999 !important;
-  }
-
   /* The chart still prints in one column when that is what was asked for, and
      when the pages could not be built. */
   .sheet.cols-2 .fixed { display: none !important; }
