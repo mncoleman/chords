@@ -232,7 +232,7 @@ function numberMarkup(html: string): string {
 // ---------------------------------------------------------------------------
 function renderHome(msg?: string): void {
   main.innerHTML = `
-    <div class="topbar" id="admin-link"></div>
+    <div class="topbar" id="admin-link"><a href="#/library">Library</a></div>
     <section class="hero">
       <h1 class="wordmark">chords</h1>
       <p class="tag">Search a song. Transpose it, read it in numbers, print it.</p>
@@ -245,20 +245,331 @@ function renderHome(msg?: string): void {
       <ul id="ac" class="autocomplete" role="listbox" hidden></ul>
       ${msg ? `<p class="muted note">${esc(msg)}</p>` : ''}
       <div id="results" class="results"></div>
+      <div id="recents" class="results"></div>
     </section>
     ${buildLine()}`;
   wireSearch();
+  drawRecents();
+  void loadLibrary(drawRecents);
   void (async () => {
     try {
       const me = await (await fetch('/api/auth/me')).json();
       if (me.admin) {
         const el = document.getElementById('admin-link');
-        if (el) el.innerHTML = '<a href="#/admin">Users</a>';
+        if (el) el.insertAdjacentHTML('beforeend', '<a href="#/admin">Users</a>');
       }
     } catch {
       /* the link is a convenience; the page works without it */
     }
   })();
+}
+
+// ---------------------------------------------------------------------------
+// Library: recently opened charts, and folders of saved ones
+// ---------------------------------------------------------------------------
+interface ChartRef {
+  id: string;
+  song: string;
+  artist: string;
+}
+interface Folder {
+  id: string;
+  name: string;
+  charts: ChartRef[];
+}
+interface Library {
+  recents: ChartRef[];
+  folders: Folder[];
+}
+
+const isLibrary = (v: unknown): boolean =>
+  !!v && Array.isArray((v as Library).recents) && Array.isArray((v as Library).folders);
+
+/** The library as last seen, kept on the device so it draws instantly and
+ *  offline; /api/library is the copy every device shares. */
+let library: Library = remembered<Library>('library', { recents: [], folders: [] }, isLibrary);
+/** Saves not yet answered. A fetch that lands meanwhile holds an older copy
+ *  than the page, so it is not allowed to overwrite it. */
+let librarySaving = 0;
+let libraryChain: Promise<unknown> = Promise.resolve();
+
+/** Change the library here first, then store it. Every change sends the whole
+ *  thing: KV is eventually consistent, so a server-side read-modify-write
+ *  could apply this edit to a copy a minute old. Saves go out in order, so the
+ *  last one to land is the last one made. */
+function saveLibrary(): void {
+  remember('library', library);
+  const body = JSON.stringify(library);
+  librarySaving++;
+  libraryChain = libraryChain
+    .then(async () => {
+      const res = await fetch('/api/library', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (res.status === 401) signedOut();
+    })
+    .catch(() => {
+      /* kept on this device; the next change sends it again */
+    })
+    .finally(() => librarySaving--);
+}
+
+/** Fetch the shared copy, then redraw whatever shows it. */
+async function loadLibrary(redraw: () => void): Promise<void> {
+  try {
+    const res = await fetch('/api/library');
+    if (res.status === 401) return signedOut();
+    const data = await res.json();
+    if (!isLibrary(data) || librarySaving) return;
+    library = data as Library;
+    remember('library', library);
+    redraw();
+  } catch {
+    /* the device's copy stands */
+  }
+}
+
+function recordOpened(ref: ChartRef): void {
+  library.recents = [ref, ...library.recents.filter((r) => r.id !== ref.id)].slice(0, 25);
+  saveLibrary();
+}
+
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+function chartRow(c: ChartRef, removeAttr: string, removeLabel: string): string {
+  return `
+    <li>
+      <a href="#/t/${esc(c.id)}">
+        <span class="st">
+          <span class="t">${esc(c.song)}</span>
+          <span class="a">${esc(c.artist)}</span>
+        </span>
+      </a>
+      <button class="x" ${removeAttr}="${esc(c.id)}" aria-label="${esc(removeLabel)}" title="${esc(removeLabel)}">×</button>
+    </li>`;
+}
+
+/** Recently opened charts, under the search box whenever there are no results. */
+function drawRecents(): void {
+  const box = document.getElementById('recents');
+  if (!box) return;
+  if (hits.length || !library.recents.length) {
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = `
+    <div class="listhead">
+      <h2>Recent</h2>
+      <button id="recents-clear" class="linkish">Clear all</button>
+    </div>
+    <ul class="hitlist lib">
+      ${library.recents.map((c) => chartRow(c, 'data-forget', 'Remove from recent')).join('')}
+    </ul>`;
+  box.querySelectorAll<HTMLButtonElement>('[data-forget]').forEach((b) =>
+    b.addEventListener('click', () => {
+      library.recents = library.recents.filter((r) => r.id !== b.dataset.forget);
+      saveLibrary();
+      drawRecents();
+    })
+  );
+  document.getElementById('recents-clear')?.addEventListener('click', () => {
+    library.recents = [];
+    saveLibrary();
+    drawRecents();
+  });
+}
+
+/** The Save control on a chart: a star that fills once the chart is in any
+ *  folder, and a list of folders to tick it into, or a new one to start. */
+function saveControl(): string {
+  if (!sheet) return '';
+  const id = String(sheet.id);
+  const saved = library.folders.some((f) => f.charts.some((c) => c.id === id));
+  return `
+    <div class="savewrap screen-only">
+      <button id="save-btn" class="savebtn${saved ? ' on' : ''}" aria-expanded="false"
+              title="Save to a folder">${saved ? '★ Saved' : '☆ Save'}</button>
+      <div id="save-pop" class="savepop" hidden>
+        ${
+          library.folders.length
+            ? `<ul>${library.folders
+                .map((f) => {
+                  const inIt = f.charts.some((c) => c.id === id);
+                  return `<li><button data-fold="${esc(f.id)}" class="${inIt ? 'on' : ''}">
+                    <span class="tick">${inIt ? '✓' : ''}</span>${esc(f.name)}</button></li>`;
+                })
+                .join('')}</ul>`
+            : '<p class="muted small">No folders yet.</p>'
+        }
+        <form id="save-new" class="row" autocomplete="off">
+          <input id="save-new-name" placeholder="New folder" aria-label="New folder name" maxlength="60">
+          <button type="submit">Add</button>
+        </form>
+        <p class="small"><a href="#/library">Open library →</a></p>
+      </div>
+    </div>`;
+}
+
+function wireSaveControl(): void {
+  if (!sheet) return;
+  const ref: ChartRef = { id: String(sheet.id), song: sheet.song, artist: sheet.artist };
+  const btn = document.getElementById('save-btn');
+  const pop = document.getElementById('save-pop');
+  if (!btn || !pop) return;
+  const redraw = (open: boolean) => {
+    const wrap = btn.closest('.savewrap');
+    if (!wrap) return;
+    wrap.outerHTML = saveControl();
+    wireSaveControl();
+    if (open) {
+      document.getElementById('save-pop')!.hidden = false;
+      document.getElementById('save-btn')!.setAttribute('aria-expanded', 'true');
+    }
+  };
+  btn.addEventListener('click', () => {
+    pop.hidden = !pop.hidden;
+    btn.setAttribute('aria-expanded', String(!pop.hidden));
+    if (!pop.hidden) document.getElementById('save-new-name')?.focus({ preventScroll: true });
+  });
+  pop.querySelectorAll<HTMLButtonElement>('[data-fold]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const f = library.folders.find((x) => x.id === b.dataset.fold);
+      if (!f) return;
+      f.charts = f.charts.some((c) => c.id === ref.id)
+        ? f.charts.filter((c) => c.id !== ref.id)
+        : [...f.charts, ref];
+      saveLibrary();
+      redraw(true);
+    })
+  );
+  document.getElementById('save-new')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = document.getElementById('save-new-name') as HTMLInputElement;
+    const name = input.value.trim().slice(0, 60);
+    if (!name) return;
+    library.folders.push({ id: newId(), name, charts: [ref] });
+    saveLibrary();
+    redraw(true);
+  });
+}
+
+// A tap anywhere else closes the folder list. The path is taken at dispatch,
+// so a tap inside it still counts after the list redraws out from under it.
+document.addEventListener('click', (e) => {
+  const pop = document.getElementById('save-pop');
+  if (!pop || pop.hidden) return;
+  if (e.composedPath().some((n) => n instanceof Element && n.classList.contains('savewrap'))) return;
+  pop.hidden = true;
+  document.getElementById('save-btn')?.setAttribute('aria-expanded', 'false');
+});
+
+function renderLibrary(folderId?: string): void {
+  document.title = 'Library · chords';
+  const draw = () => (folderId ? drawFolder(folderId) : drawFolders());
+  draw();
+  void loadLibrary(draw);
+}
+
+function drawFolders(): void {
+  main.innerHTML = `
+    <article class="chart admin library">
+      <div class="toolbar screen-only">
+        <a class="back" href="#/" title="Back to search">←</a>
+        <strong>Library</strong>
+        <div class="spacer"></div>
+      </div>
+      <section class="panel">
+        <form id="fold-new" class="row" autocomplete="off">
+          <input id="fold-new-name" placeholder="New folder" aria-label="New folder name" maxlength="60">
+          <button type="submit">Add</button>
+        </form>
+        ${
+          library.folders.length
+            ? `<ul class="hitlist lib">${library.folders
+                .map(
+                  (f) => `
+                <li><a href="#/library/${esc(f.id)}">
+                  <span class="st"><span class="t">${esc(f.name)}</span></span>
+                  <span class="rt">${f.charts.length} ${f.charts.length === 1 ? 'song' : 'songs'}</span>
+                </a></li>`
+                )
+                .join('')}</ul>`
+            : '<p class="muted small">No folders yet. Make one here, or with ☆ Save on any chart.</p>'
+        }
+      </section>
+    </article>`;
+  document.getElementById('fold-new')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = document.getElementById('fold-new-name') as HTMLInputElement;
+    const name = input.value.trim().slice(0, 60);
+    if (!name) return;
+    library.folders.push({ id: newId(), name, charts: [] });
+    saveLibrary();
+    drawFolders();
+  });
+}
+
+function drawFolder(id: string, confirmDelete = false): void {
+  const f = library.folders.find((x) => x.id === id);
+  if (!f) {
+    main.innerHTML = `
+      <section class="hero">
+        <h1>No such folder</h1>
+        <p><a href="#/library">← Library</a></p>
+      </section>`;
+    return;
+  }
+  document.title = `${f.name} · chords`;
+  main.innerHTML = `
+    <article class="chart admin library">
+      <div class="toolbar screen-only">
+        <a class="back" href="#/library" title="Back to library">←</a>
+        <strong>${esc(f.name)}</strong>
+        <div class="spacer"></div>
+      </div>
+      <section class="panel">
+        ${
+          f.charts.length
+            ? `<ul class="hitlist lib">${f.charts.map((c) => chartRow(c, 'data-unsave', 'Remove from folder')).join('')}</ul>`
+            : '<p class="muted small">Empty. Open a chart and use ☆ Save to add it here.</p>'
+        }
+      </section>
+      <section class="panel">
+        <form id="fold-rename" class="row" autocomplete="off">
+          <input id="fold-rename-name" value="${esc(f.name)}" aria-label="Folder name" maxlength="60">
+          <button type="submit">Rename</button>
+        </form>
+        <div class="row">
+          <button id="fold-delete" class="danger">${confirmDelete ? 'Tap again to delete this folder' : 'Delete folder'}</button>
+          ${confirmDelete ? '<button id="fold-keep">Keep it</button>' : ''}
+        </div>
+      </section>
+    </article>`;
+  main.querySelectorAll<HTMLButtonElement>('[data-unsave]').forEach((b) =>
+    b.addEventListener('click', () => {
+      f.charts = f.charts.filter((c) => c.id !== b.dataset.unsave);
+      saveLibrary();
+      drawFolder(id);
+    })
+  );
+  document.getElementById('fold-rename')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = (document.getElementById('fold-rename-name') as HTMLInputElement).value.trim().slice(0, 60);
+    if (!name || name === f.name) return;
+    f.name = name;
+    saveLibrary();
+    drawFolder(id);
+  });
+  // Two taps rather than a confirm() dialog: a folder can hold a whole set list.
+  document.getElementById('fold-delete')?.addEventListener('click', () => {
+    if (!confirmDelete) return drawFolder(id, true);
+    library.folders = library.folders.filter((x) => x.id !== id);
+    saveLibrary();
+    location.hash = '#/library';
+  });
+  document.getElementById('fold-keep')?.addEventListener('click', () => drawFolder(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -823,6 +1134,7 @@ async function correctSpelling(q: string): Promise<{ ask: Ask; label: string } |
 function renderResults(): void {
   const box = document.getElementById('results');
   if (!box) return;
+  drawRecents();
   if (!hits.length) {
     box.innerHTML = `<p class="muted">Nothing on Ultimate Guitar for that${
       lastQuery ? ` — searched for “${esc(lastQuery)}”` : ''
@@ -868,6 +1180,7 @@ async function renderSheet(id: string): Promise<void> {
     semitones = 0;
     numbers = false;
     document.title = `${sheet.song} — ${sheet.artist} · chords`;
+    recordOpened({ id, song: sheet.song, artist: sheet.artist });
     drawSheet();
   } catch (e) {
     main.innerHTML = `
@@ -1391,7 +1704,10 @@ function drawSheet(): void {
           ${colSeg('-m')}
           <button id="print-m" class="primary" aria-label="Print or save as PDF" title="Print or save as PDF">Print</button>
         </div>
-        <h1>${esc(sheet.song)}</h1>
+        <div class="titlerow">
+          <h1>${esc(sheet.song)}</h1>
+          ${saveControl()}
+        </div>
         <p class="byline">${esc(sheet.artist)}</p>
         <div class="headline">
           <div>
@@ -1494,6 +1810,7 @@ function drawSheet(): void {
   // title on a phone, where the toolbar has no width to spare. CSS shows one.
   on('print', printChart);
   on('print-m', printChart);
+  wireSaveControl();
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,6 +1820,11 @@ function route(): void {
   const h = location.hash || '#/';
   if (h.startsWith('#/admin')) {
     void renderAdmin();
+    return;
+  }
+  const lib = h.match(/^#\/library(?:\/([a-z0-9]{1,24}))?$/);
+  if (lib) {
+    renderLibrary(lib[1]);
     return;
   }
   const m = h.match(/^#\/t\/(\d{1,12})/);
