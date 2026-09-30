@@ -127,12 +127,56 @@ const json = (body, status = 200, cache = 'no-store') =>
     headers: { 'Content-Type': 'application/json', 'Cache-Control': cache },
   });
 
-export async function onRequestGet({ request }) {
+/** The edge cache. Every UG answer here is the same for everyone who may ask
+ *  (the middleware has already checked the session before this runs), so a
+ *  tab or a search one person has fetched need not go back to UG for the next.
+ *  Keyed on the bare URL: no cookie, and the query string is the whole request.
+ *
+ *  The copy stored carries a public s-maxage because the Cache API declines to
+ *  store anything marked private; what goes back to the browser keeps the exact
+ *  headers it always had. Only 200s are stored. */
+const edge = () => (typeof caches !== 'undefined' ? caches.default : null);
+
+async function fromEdge(key, cache) {
+  const c = edge();
+  if (!c) return null;
+  try {
+    const hit = await c.match(key);
+    if (!hit) return null;
+    return new Response(hit.body, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': cache },
+    });
+  } catch {
+    return null;
+  }
+}
+
+function toEdge(key, res, seconds, waitUntil) {
+  const c = edge();
+  if (!c || res.status !== 200) return res;
+  const copy = new Response(res.clone().body, {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, s-maxage=${seconds}` },
+  });
+  const put = c.put(key, copy).catch(() => {});
+  if (waitUntil) waitUntil(put);
+  return res;
+}
+
+const TAB_CACHE = 'private, max-age=86400';
+const SEARCH_CACHE = 'private, max-age=3600';
+
+export async function onRequestGet({ request, waitUntil }) {
   const url = new URL(request.url);
   const q = (url.searchParams.get('q') || '').trim();
   const id = (url.searchParams.get('id') || '').trim();
+  const key = new Request(url.toString(), { method: 'GET' });
 
   try {
+    const cached = await fromEdge(key, id ? TAB_CACHE : SEARCH_CACHE);
+    if (cached) return cached;
+
     const headers = await ugHeaders();
 
     if (id) {
@@ -146,7 +190,7 @@ export async function onRequestGet({ request }) {
       const content = clean(t.content || t.tab_view?.wiki_tab?.content || '');
       if (!content) return json({ error: 'That tab has no chord content' }, 404);
 
-      return json(
+      return toEdge(key, json(
         {
           id: t.id,
           song: t.song_name,
@@ -162,8 +206,8 @@ export async function onRequestGet({ request }) {
         },
         200,
         // A given tab revision is immutable; let the edge hold it.
-        'private, max-age=86400'
-      );
+        TAB_CACHE
+      ), 86400, waitUntil);
     }
 
     const title = (url.searchParams.get('title') || '').trim();
@@ -225,7 +269,7 @@ export async function onRequestGet({ request }) {
       break;
     }
 
-    return json(
+    return toEdge(key, json(
       {
         results: results.slice(0, 20),
         // Which rung answered, so the page can say it looked for one thing and
@@ -234,8 +278,8 @@ export async function onRequestGet({ request }) {
         asked: { title: title || q, artist: artist || null },
       },
       200,
-      'private, max-age=3600'
-    );
+      SEARCH_CACHE
+    ), 3600, waitUntil);
   } catch (e) {
     return json({ error: e.message || 'Lookup failed' }, 500);
   }

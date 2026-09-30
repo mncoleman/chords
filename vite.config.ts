@@ -23,6 +23,8 @@ function buildStamp(): string {
 // at https://<user>.github.io/chords/ and at any other mount point.
 export default defineConfig({
   base: './',
-  build: { outDir: 'dist' },
+  // One entry chunk and no dynamic imports, so there is never a modulepreload
+  // link for the polyfill to serve; it was dead code on every load.
+  build: { outDir: 'dist', modulePreload: { polyfill: false } },
   define: { __BUILD__: JSON.stringify(buildStamp()) },
 });
