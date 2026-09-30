@@ -269,7 +269,8 @@ export async function onRequestGet({ request, waitUntil }) {
       break;
     }
 
-    return toEdge(key, json(
+    // An empty result may be UG hiccuping, so only share-cache real matches.
+    const body = json(
       {
         results: results.slice(0, 20),
         // Which rung answered, so the page can say it looked for one thing and
@@ -279,7 +280,8 @@ export async function onRequestGet({ request, waitUntil }) {
       },
       200,
       SEARCH_CACHE
-    ), 3600, waitUntil);
+    );
+    return results.length ? toEdge(key, body, 3600, waitUntil) : body;
   } catch (e) {
     return json({ error: e.message || 'Lookup failed' }, 500);
   }
