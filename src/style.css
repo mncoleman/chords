@@ -1012,3 +1012,42 @@ pre.lyric { color: var(--fg); }
   .ink, .notes-drawer, .ink-palette, #draw-btn, #notes-btn { display: none !important; }
   body.notes-docked { padding-right: 0; }
 }
+
+/* ---------------------------------------------------------- skeletons ---- */
+/* The shape of what is loading, in the place it will land. A slow sweep of
+   light rather than a blink: it reads as "coming", not as "broken". */
+.vh {
+  position: absolute !important; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+.sk {
+  display: block; height: 0.8rem; border-radius: 6px; flex: none; max-width: 100%;
+  background: linear-gradient(90deg, #18181b 0%, #26262b 45%, #18181b 90%);
+  background-size: 250% 100%;
+  animation: sk-sweep 1.4s ease-in-out infinite;
+}
+@keyframes sk-sweep { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: pulse 1.6s ease-in-out infinite; } }
+
+.skeleton .sk-bar { gap: 0.6rem; }
+.skeleton .sk-pill { height: 2.1rem; border-radius: 10px; }
+.skeleton .masthead { display: flex; flex-direction: column; gap: 0.7rem; }
+.skeleton .sk-title { height: 2.3rem; border-radius: 8px; }
+.skeleton .sk-by { height: 1rem; }
+.skeleton .blk { display: flex; flex-direction: column; gap: 0.55rem; margin-bottom: 1.6rem; break-inside: avoid; }
+.skeleton .sk-sec { height: 1.4rem; border-radius: 4px; margin-bottom: 0.3rem; }
+.skeleton .sk-pair { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.35rem; }
+.skeleton .sk-chord { height: 0.7rem; opacity: 0.7; }
+
+.sk-row { display: flex; align-items: center; gap: 1rem; padding: 0.95rem 0.9rem; list-style: none; }
+.hitlist .sk-row + .sk-row, .people .sk-row + .sk-row { border-top: 1px solid var(--line); }
+.people .sk-row { padding: 0.6rem 0; gap: 0.7rem; }
+.sk-lines { display: flex; flex-direction: column; gap: 0.45rem; flex: 1; min-width: 0; }
+.sk-sub { height: 0.65rem; opacity: 0.75; }
+.sk-right { margin-left: auto; height: 0.7rem; }
+.sk-art { width: 34px; height: 34px; border-radius: 5px; }
+.sk-av { width: 36px; height: 36px; border-radius: 50%; }
+.autocomplete .sk-row { padding: 0.5rem 0.6rem; gap: 0.7rem; cursor: default; }
+.autocomplete .sk-row + .sk-row { border-top: 0; }
+.autocomplete .sk-o { height: 0.55rem; margin-top: 0.3rem; opacity: 0.7; }
+@media print { .skeleton, .sk-row { display: none !important; } }

@@ -127,6 +127,8 @@ interface Origin {
 }
 /** Keyed by songKey. Present but null: asked, and nobody knows. */
 const origins = new Map<string, Origin | null>();
+/** Being looked up now. */
+const originPending = new Set<string>();
 let originTimer: number | undefined;
 
 /** A song's title without what Spotify adds to a recording of it:
@@ -147,6 +149,8 @@ const songKey = (t: Suggestion) => loose(songTitle(t.title));
 let acRaw = '';
 /** -1 is the search-as-typed row at the top; 0+ index into acItems. */
 let acIndex = -1;
+/** Suggestions asked for and not back yet: the dropdown shows their shape. */
+let acPending = false;
 let acTimer: number | undefined;
 let acSeq = 0;
 
@@ -159,6 +163,60 @@ function signedOut(): void {
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+// ---------------------------------------------------------------------------
+// Skeletons: the shape of what is loading, drawn where it will land, so the
+// page is already laid out when it arrives rather than jumping from a line of
+// "Loading…" to a full chart.
+// ---------------------------------------------------------------------------
+const sk = (w: string, cls = '') => `<span class="sk${cls ? ` ${cls}` : ''}" style="width:${w}"></span>`;
+
+/** A chart that has not come yet: controls, title, and two sections of
+ *  chord and lyric lines. */
+function chartSkeleton(label: string, inset = !!setCtx): string {
+  const widths = [
+    ['18%', '72%'],
+    ['26%', '64%'],
+    ['14%', '80%'],
+    ['22%', '58%'],
+  ];
+  const block = (n: number) => `
+    <section class="blk">
+      ${sk('100%', 'sk-sec')}
+      ${widths
+        .slice(0, n)
+        .map(([c, l]) => `<div class="sk-pair">${sk(c, 'sk-chord')}${sk(l)}</div>`)
+        .join('')}
+    </section>`;
+  return `
+    <article class="chart skeleton${inset ? ' inset' : ''}" aria-busy="true">
+      <span class="vh">Loading ${esc(label)}</span>
+      <div class="toolbar screen-only sk-bar" aria-hidden="true">
+        ${sk('2rem', 'sk-pill')}${sk('9rem', 'sk-pill')}${sk('8rem', 'sk-pill')}${sk('6.5rem', 'sk-pill')}
+      </div>
+      <header class="masthead" aria-hidden="true">
+        ${sk('min(22rem, 70%)', 'sk-title')}
+        ${sk('10rem', 'sk-by')}
+        ${sk('6rem')}
+      </header>
+      <div class="sheet${columns === 2 ? ' cols-2' : ''}" aria-hidden="true">${block(4)}${block(3)}${block(4)}</div>
+    </article>`;
+}
+
+/** Rows of a list that has not come yet. */
+function rowsSkeleton(n: number, opts: { art?: boolean; avatar?: boolean; right?: boolean } = {}): string {
+  const titles = ['58%', '44%', '66%', '38%', '52%'];
+  const subs = ['32%', '26%', '40%', '22%', '30%'];
+  return Array.from(
+    { length: n },
+    (_, i) => `
+    <li class="sk-row" aria-hidden="true">
+      ${opts.art ? sk('34px', 'sk-art') : ''}${opts.avatar ? sk('36px', 'sk-av') : ''}
+      <span class="sk-lines">${sk(titles[i % 5])}${sk(subs[i % 5], 'sk-sub')}</span>
+      ${opts.right ? sk('3.5rem', 'sk-right') : ''}
+    </li>`
+  ).join('');
+}
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"']+/g;
 /** Its own copy: URL_RE is global, and .test() on a global regex is stateful. */
@@ -646,8 +704,11 @@ document.addEventListener('click', (e) => {
 function renderLibrary(folderId?: string): void {
   document.title = 'Folders · chords';
   const draw = () => (folderId ? drawFolder(folderId) : drawFolders());
+  // Started first, so the first draw knows a copy is on its way and shows
+  // the list's shape rather than "No folders yet".
+  const loading = loadLibrary(draw);
   draw();
-  void loadLibrary(draw);
+  void loading;
 }
 
 function drawFolders(): void {
@@ -674,7 +735,9 @@ function drawFolders(): void {
                 </a></li>`
                 )
                 .join('')}</ul>`
-            : '<p class="muted small">No folders yet. Make one here, or with ☆ Save on any chart.</p>'
+            : libraryLoading && !librarySynced
+              ? `<ul class="hitlist lib" aria-busy="true">${rowsSkeleton(4, { right: true })}</ul>`
+              : '<p class="muted small">No folders yet. Make one here, or with ☆ Save on any chart.</p>'
         }
       </section>
     </article>`;
@@ -693,6 +756,18 @@ function drawFolders(): void {
 
 function drawFolder(id: string, confirmDelete = false): void {
   const f = library.folders.find((x) => x.id === id);
+  if (!f && libraryLoading && !librarySynced) {
+    main.innerHTML = `
+      <article class="chart admin library" aria-busy="true">
+        <div class="toolbar screen-only">
+          <a class="back" href="#/folders" title="Back to folders">←</a>
+          ${sk('8rem')}
+          <div class="spacer"></div>
+        </div>
+        <section class="panel"><ul class="hitlist lib">${rowsSkeleton(5, { right: true })}</ul></section>
+      </article>`;
+    return;
+  }
   if (!f) {
     main.innerHTML = `
       <section class="hero">
@@ -910,7 +985,7 @@ async function renderSet(fid: string, index: number): Promise<void> {
   index = Math.max(0, Math.min(f.charts.length - 1, index));
   setCtx = { fid, index };
   const ref = f.charts[index];
-  if (!chartCache.has(ref.id)) main.innerHTML = `<p class="muted loading">Loading ${esc(ref.song)}…</p>`;
+  if (!chartCache.has(ref.id)) main.innerHTML = chartSkeleton(ref.song, true);
   let data: Sheet;
   try {
     data = await fetchChart(ref.id);
@@ -950,7 +1025,7 @@ function peekArticle(f: Folder, n: number): string {
   const ref = f.charts[n];
   const data = chartCache.get(ref.id);
   if (!data) {
-    return `<article class="chart inset"><p class="muted loading">Loading ${esc(ref.song)}…</p></article>`;
+    return chartSkeleton(ref.song, true);
   }
   const was = { sheet, lines, inferredKey, writtenNumberTonic, ctx: setCtx, ...currentOpts() };
   useChart(data);
@@ -1961,7 +2036,8 @@ function paintAdmin(): void {
       <section class="panel">
         <h2>Has access</h2>
         <ul class="people">
-          ${(() => {
+          ${!adminData ? rowsSkeleton(3, { avatar: true }) : ''}
+          ${!adminData ? '' : (() => {
             const me = data.me ?? {};
             const p: Person = me.profile ?? { name: me.name, username: me.username };
             return `<li>
@@ -1989,7 +2065,9 @@ function paintAdmin(): void {
                     )
                   )
                   .join('')
-              : `<li class="muted small">${adminData ? 'Nobody else yet.' : 'Loading…'}</li>`
+              : adminData
+                ? '<li class="muted small">Nobody else yet.</li>'
+                : ''
           }
         </ul>
       </section>
@@ -2160,6 +2238,7 @@ async function suggest(q: string): Promise<void> {
   // title are noise; a short one is most likely a title.
   acItems = words >= 5 ? [...lyric, ...byName] : [...byName, ...lyric];
   acIndex = -1;
+  acPending = false;
   drawAutocomplete();
   window.clearTimeout(originTimer);
   originTimer = window.setTimeout(() => void findOrigins(seq), 450);
@@ -2176,26 +2255,40 @@ async function findOrigins(seq: number): Promise<void> {
     asks.push(t);
     if (asks.length === 3) break;
   }
+  for (const t of asks) originPending.add(songKey(t));
+  if (asks.length) drawAutocomplete();
   for (const t of asks) {
-    if (seq !== acSeq) return; // the dropdown moved on
     const k = songKey(t);
-    if (origins.has(k)) continue;
+    if (seq !== acSeq) {
+      // The dropdown moved on; what was not asked yet is not pending either.
+      for (const a of asks) originPending.delete(songKey(a));
+      return;
+    }
+    if (origins.has(k)) {
+      originPending.delete(k);
+      continue;
+    }
     const artist = t.artists?.[0] || t.artist.split(',')[0].trim();
     try {
       const res = await fetch(`/api/original?title=${encodeURIComponent(songTitle(t.title))}&artist=${encodeURIComponent(artist)}`);
-      if (!res.ok) continue; // busy or down: leave it unasked, to try next time
-      const o = (await res.json()) as Origin;
-      origins.set(k, o.writers?.length || o.original ? o : null);
+      if (res.ok) {
+        const o = (await res.json()) as Origin;
+        origins.set(k, o.writers?.length || o.original ? o : null);
+      }
+      // Not ok: busy or down. Left unasked, to try next time.
     } catch {
-      continue;
+      /* likewise */
     }
+    originPending.delete(k);
     if (seq === acSeq && acRaw) drawAutocomplete();
   }
 }
 
 /** The line under a suggestion saying whose song it is, if anyone knows. */
 function originLine(t: Suggestion): string {
-  const o = origins.get(songKey(t));
+  const k = songKey(t);
+  if (originPending.has(k)) return `<span class="o">${sk('9rem', 'sk-o')}</span>`;
+  const o = origins.get(k);
   if (!o) return '';
   if (o.original) {
     const by = loose(o.original.artist);
@@ -2213,6 +2306,7 @@ function originLine(t: Suggestion): string {
 /** Put the dropdown away. */
 function closeAutocomplete(): void {
   acItems = [];
+  acPending = false;
   acRaw = '';
   acIndex = -1;
   drawAutocomplete();
@@ -2257,7 +2351,8 @@ function drawAutocomplete(): void {
         </span>
       </li>`
       )
-      .join('');
+      .join('') +
+    (acPending && !acItems.length ? rowsSkeleton(4, { art: true }) : '');
   ul.hidden = false;
   input?.setAttribute('aria-expanded', 'true');
 }
@@ -2333,6 +2428,7 @@ function wireSearch(): void {
     // underneath it when the debounced lookup comes back.
     acRaw = q;
     acIndex = -1;
+    acPending = true;
     drawAutocomplete();
     acTimer = window.setTimeout(() => void suggest(q), 200);
   });
@@ -2412,7 +2508,7 @@ async function search(ask: Ask | string): Promise<void> {
   lastQuery = a.q || [a.title, a.artist].filter(Boolean).join(' ');
   const seq = ++searchSeq;
   const box = document.getElementById('results');
-  if (box) box.innerHTML = `<p class="muted loading">Searching…</p>`;
+  if (box) box.innerHTML = `<span class="vh">Searching</span><ul class="hitlist" aria-busy="true">${rowsSkeleton(5, { right: true })}</ul>`;
   searchNote = null;
 
   try {
@@ -2555,7 +2651,7 @@ function useChart(data: Sheet): void {
 }
 
 async function renderSheet(id: string): Promise<void> {
-  main.innerHTML = `<p class="muted loading">Loading chart…</p>`;
+  main.innerHTML = chartSkeleton('chart');
   try {
     const data = await fetchChart(id);
     useChart(data);
