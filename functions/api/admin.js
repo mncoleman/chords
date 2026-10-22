@@ -51,8 +51,10 @@ async function readAll(kv, prefix) {
   let cursor;
   do {
     const page = await kv.list({ prefix, cursor });
-    for (const k of page.keys) {
-      const raw = await kv.get(k.name);
+    // All of a page at once: one get after another made the Users page wait a
+    // round trip per person before it could draw anything.
+    const raws = await Promise.all(page.keys.map((k) => kv.get(k.name)));
+    for (const raw of raws) {
       if (raw) {
         try {
           out.push(JSON.parse(raw));
@@ -124,6 +126,32 @@ async function telegramLookup(env, query) {
   };
 }
 
+/** The owner's own Telegram profile. Their OIDC subject says nothing about
+ *  which Telegram account it is, so the id is configured separately and the
+ *  bot is asked for the name and picture.
+ *
+ *  That is three Telegram calls, one of them downloading the picture, and it
+ *  was made on every visit to the Users page. A name and photo change rarely,
+ *  so the answer is kept for a day. */
+const PROFILE_KEY = 'cache:owner-profile';
+
+async function ownerProfile(ctx) {
+  const id = ctx.env.OWNER_TELEGRAM_ID;
+  if (!id) return null;
+  const kv = ctx.env.CHORDS_USERS;
+  try {
+    const kept = await kv.get(PROFILE_KEY, 'json');
+    if (kept && kept.telegramId === String(id)) return kept;
+  } catch {
+    /* fall through to Telegram */
+  }
+  const found = await telegramLookup(ctx.env, String(id));
+  if (found.error) return null;
+  const put = kv.put(PROFILE_KEY, JSON.stringify(found), { expirationTtl: 86400 }).catch(() => {});
+  if (ctx.waitUntil) ctx.waitUntil(put);
+  return found;
+}
+
 export async function onRequestGet(ctx) {
   const gate = await requireAdmin(ctx);
   if (gate.error) return gate.error;
@@ -138,21 +166,15 @@ export async function onRequestGet(ctx) {
     return json(await telegramLookup(ctx.env, clean));
   }
 
-  const [users, pending, invites, idInvites] = await Promise.all([
+  const [users, pending, invites, idInvites, profile, features] = await Promise.all([
     readAll(kv, 'user:'),
     readAll(kv, 'pending:'),
     readAll(kv, 'invite:'),
     readAll(kv, 'idinvite:'),
+    gate.owner ? ownerProfile(ctx) : null,
+    readFeatures(ctx.env),
   ]);
 
-  // The owner's own Telegram profile. Their OIDC subject says nothing about
-  // which Telegram account it is, so the id is configured separately and the
-  // bot is asked for the name and picture.
-  let profile = null;
-  if (gate.owner && ctx.env.OWNER_TELEGRAM_ID) {
-    const found = await telegramLookup(ctx.env, String(ctx.env.OWNER_TELEGRAM_ID));
-    if (!found.error) profile = found;
-  }
   return json({
     me: {
       sub: String(gate.payload.sub),
@@ -162,7 +184,7 @@ export async function onRequestGet(ctx) {
       profile,
     },
     ownerSub: String(ctx.env.OWNER_SUB || ''),
-    features: { names: FEATURES, on: await readFeatures(ctx.env) },
+    features: { names: FEATURES, on: features },
     users: users.sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     pending: pending.sort((a, b) => (a.requestedAt || '').localeCompare(b.requestedAt || '')),
     invites: [

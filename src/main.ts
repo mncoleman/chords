@@ -286,6 +286,7 @@ function renderHome(msg?: string): void {
         const el = document.getElementById('admin-link');
         if (el) el.insertAdjacentHTML('beforeend', '<a href="#/admin" aria-label="Users"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg><span class="lbl">Users</span></a>');
         sizeHomeNav();
+        prefetchAdmin();
       }
     } catch {
       /* the link is a convenience; the page works without it */
@@ -1831,20 +1832,38 @@ async function adminPost(body: Record<string, unknown>): Promise<void> {
   void refreshAdmin();
 }
 
+/** Fetch the user list in the background once the Users link is shown, so
+ *  the first tap on it has something to draw. It never paints: by the time it
+ *  lands the reader may be anywhere. */
+function prefetchAdmin(): void {
+  fetch('/api/admin')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (d && !adminData) adminData = d;
+    })
+    .catch(() => {});
+}
+
 async function refreshAdmin(): Promise<void> {
   const res = await fetch('/api/admin');
+  // Left the page while it loaded: keep the data, leave the screen alone.
+  const here = location.hash.startsWith('#/admin');
   if (res.status === 401) return signedOut();
   if (res.status === 403) {
-    main.innerHTML = `<section class="hero"><h1>Admins only</h1><p><a href="#/">← Back</a></p></section>`;
+    if (here) main.innerHTML = `<section class="hero"><h1>Admins only</h1><p><a href="#/">← Back</a></p></section>`;
     return;
   }
   adminData = await res.json();
-  paintAdmin();
+  if (here) paintAdmin();
 }
 
 async function renderAdmin(): Promise<void> {
   document.title = 'Users · chords';
-  if (adminData) paintAdmin(); // instant on a revisit; the fetch corrects it
+  // Drawn straight away, from the last answer if there is one and as an empty
+  // page that says it is loading if not; the fetch fills in or corrects it.
+  // Waiting on the fetch before drawing left the previous page on screen, so
+  // the tap looked ignored.
+  paintAdmin();
   await refreshAdmin();
 }
 
@@ -1939,7 +1958,7 @@ function paintAdmin(): void {
                     )
                   )
                   .join('')
-              : '<li class="muted small">Nobody else yet.</li>'
+              : `<li class="muted small">${adminData ? 'Nobody else yet.' : 'Loading…'}</li>`
           }
         </ul>
       </section>
