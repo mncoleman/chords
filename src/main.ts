@@ -112,6 +112,29 @@ interface Suggestion {
   lyric?: boolean;
 }
 let acItems: Suggestion[] = [];
+
+/** Who a song is really by, from /api/original: Spotify lists every recording
+ *  of a title side by side and never says which one is the song. */
+interface Origin {
+  writers: string[];
+  original: { artist: string; year: string | null } | null;
+}
+/** Keyed by songKey. Present but null: asked, and nobody knows. */
+const origins = new Map<string, Origin | null>();
+let originTimer: number | undefined;
+
+/** A song's title without what Spotify adds to a recording of it:
+ *  "Hallelujah - Remastered 2011", "Valerie (feat. Amy Winehouse)". Only
+ *  trailing brackets go; "(I Can't Get No) Satisfaction" keeps its own. */
+function songTitle(title: string): string {
+  const trailing = /\s*[([][^()[\]]*[)\]]\s*$/;
+  let t = title.split(' - ')[0].trim();
+  while (trailing.test(t) && t.replace(trailing, '')) t = t.replace(trailing, '');
+  return t;
+}
+const loose = (s: string) => s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+const songKey = (t: Suggestion) => loose(songTitle(t.title));
+
 /** The typed text the dropdown is currently open for; '' means closed. It is
  *  kept apart from acItems because the list stays open, showing the
  *  search-as-typed row, even when Spotify has nothing to offer. */
@@ -2130,6 +2153,53 @@ async function suggest(q: string): Promise<void> {
   acItems = words >= 5 ? [...lyric, ...byName] : [...byName, ...lyric];
   acIndex = -1;
   drawAutocomplete();
+  window.clearTimeout(originTimer);
+  originTimer = window.setTimeout(() => void findOrigins(seq), 450);
+}
+
+/** Look up the original of the first few songs in the dropdown, once the
+ *  typing has paused. One at a time: MusicBrainz, behind the endpoint, asks
+ *  for about a request a second, and the top rows are the ones read. */
+async function findOrigins(seq: number): Promise<void> {
+  const asks: Suggestion[] = [];
+  for (const t of acItems) {
+    const k = songKey(t);
+    if (!k || origins.has(k) || asks.some((a) => songKey(a) === k)) continue;
+    asks.push(t);
+    if (asks.length === 3) break;
+  }
+  for (const t of asks) {
+    if (seq !== acSeq) return; // the dropdown moved on
+    const k = songKey(t);
+    if (origins.has(k)) continue;
+    const artist = t.artists?.[0] || t.artist.split(',')[0].trim();
+    try {
+      const res = await fetch(`/api/original?title=${encodeURIComponent(songTitle(t.title))}&artist=${encodeURIComponent(artist)}`);
+      if (!res.ok) continue; // busy or down: leave it unasked, to try next time
+      const o = (await res.json()) as Origin;
+      origins.set(k, o.writers?.length || o.original ? o : null);
+    } catch {
+      continue;
+    }
+    if (seq === acSeq && acRaw) drawAutocomplete();
+  }
+}
+
+/** The line under a suggestion saying whose song it is, if anyone knows. */
+function originLine(t: Suggestion): string {
+  const o = origins.get(songKey(t));
+  if (!o) return '';
+  if (o.original) {
+    const by = loose(o.original.artist);
+    const performers = [...(t.artists ?? []), t.artist].map(loose).filter(Boolean);
+    if (performers.some((p) => p === by || p.includes(by) || by.includes(p))) {
+      return '<span class="o"><span class="origtag">Original</span></span>';
+    }
+    const year = o.original.year ? `, ${esc(o.original.year)}` : '';
+    return `<span class="o">Cover · original by ${esc(o.original.artist)}${year}</span>`;
+  }
+  const names = o.writers.slice(0, 3).join(', ') + (o.writers.length > 3 ? ' and others' : '');
+  return `<span class="o">Written by ${esc(names)}</span>`;
 }
 
 /** Put the dropdown away. */
@@ -2175,6 +2245,7 @@ function drawAutocomplete(): void {
         <span class="st">
           <span class="t">${esc(t.title)}</span>
           <span class="a">${t.lyric ? '<span class="lyrictag">Lyric match</span> ' : ''}${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ''}</span>
+          ${originLine(t)}
         </span>
       </li>`
       )

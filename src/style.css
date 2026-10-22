@@ -865,5 +865,11 @@ pre.lyric { color: var(--fg); }
 .autocomplete .st { display: flex; flex-direction: column; min-width: 0; }
 .autocomplete .t { font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .autocomplete .a { font-size: 0.78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Whose song it is: the original recording, or who covered whom. */
+.autocomplete .o { font-size: 0.72rem; color: var(--muted); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.origtag {
+  display: inline-block; padding: 0 0.4rem; border-radius: 999px;
+  font-size: 0.68rem; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
 
 @media print { .autocomplete { display: none !important; } }
