@@ -10,6 +10,7 @@ import {
 } from './music';
 import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
 import { Follower, buildSteps } from './follow';
+import { initNotes, inkWantsTouch, mountInk, notesButtons, openChart, wireNotesButtons } from './notes';
 
 /** Commit and build time, stamped in by vite. See buildStamp() there. */
 declare const __BUILD__: string;
@@ -50,6 +51,11 @@ const main = document.getElementById('main')!;
 let hits: Hit[] = [];
 let sheet: Sheet | null = null;
 let lines: SheetLine[] = [];
+/** Each line's place in the chart as UG wrote it. What is shown is filtered
+ *  (piano drops tab, Short drops repeats) and Short shows copies, so neither
+ *  position nor identity in the shown list says which line it is. Ink is
+ *  pinned to this. */
+const lineSrc = new WeakMap<SheetLine, number>();
 let semitones = 0;
 let numbers = false;
 /** Filled in when UG ships a chart with no tonality of its own. */
@@ -1089,6 +1095,8 @@ function wireSwipe(art: HTMLElement): void {
     (e) => {
       active = false;
       if (!setCtx || sliding || e.touches.length !== 1) return;
+      // A pen stroke across the chart is not a swipe to the next song.
+      if (inkWantsTouch(e)) return;
       const t = e.target as Element;
       if (t.closest('input, .savepop')) return;
       // A chord line wider than the screen scrolls sideways itself (iPad).
@@ -2540,6 +2548,7 @@ async function fetchChart(id: string): Promise<Sheet> {
 function useChart(data: Sheet): void {
   sheet = data;
   lines = parseSheet(sheet.content);
+  lines.forEach((l, i) => lineSrc.set(l, i));
   const symbols = lines.flatMap((l) => l.chords.map((c) => c.symbol));
   inferredKey = sheet.key ? null : inferKey(symbols);
   writtenNumberTonic = writtenTonic(effectiveKey(), numberCapo(), symbols);
@@ -2612,13 +2621,20 @@ function condense(all: SheetLine[]): SheetLine[] {
 
     // A repeat with no words of its own is pure instrumental — nothing to keep.
     if (!l.lyric.trim()) {
-      if (l.section) out.push({ section: l.section, chords: [], lyric: '' });
+      if (l.section) out.push(sameLine({ section: l.section, chords: [], lyric: '' }, l));
       continue;
     }
-    out.push({ section: l.section, chords: [], lyric: l.lyric });
+    out.push(sameLine({ section: l.section, chords: [], lyric: l.lyric }, l));
   }
 
   return collapseBlanks(out);
+}
+
+/** A shortened copy of a line is still that line, for whatever is pinned to it. */
+function sameLine(copy: SheetLine, of: SheetLine): SheetLine {
+  const src = lineSrc.get(of);
+  if (src !== undefined) lineSrc.set(copy, src);
+  return copy;
 }
 
 /** Dropping lines leaves runs of blank lines behind; collapse them. */
@@ -3055,7 +3071,7 @@ function chartParts(): { headline: string; body: string } {
     // row is what double-spaced every repeated verse in the short version.
     const cls = `pair${hasUrl(l.lyric) ? ' weblink' : ''}${l.chords.length ? '' : ' bare'}`;
     return `
-      <div class="${cls}" data-li="${chart.indexOf(l)}">
+      <div class="${cls}" data-li="${chart.indexOf(l)}"${lineSrc.has(l) ? ` data-src="${lineSrc.get(l)}"` : ''}>
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
           ${row.trim() ? `<pre class="chords">${numberMarkup(esc(row))}</pre>` : ''}
@@ -3149,6 +3165,7 @@ function chartArticle(): string {
               ? `<button id="follow-btn" class="savebtn screen-only${follower ? ' on' : ''}" title="Listen to the playing and keep the chart up with it">${follower ? '■ Stop following' : '♪ Follow'}</button>`
               : ''
           }
+          ${notesButtons()}
         </div>
         <p class="byline">${esc(sheet.artist)}</p>
         ${headline}
@@ -3243,6 +3260,9 @@ function drawSheet(): void {
   wireSaveControl();
   wireSetChrome();
   wireFollow();
+  openChart(String(sheet.id), `${sheet.song} · ${sheet.artist}`);
+  wireNotesButtons();
+  mountInk(main.querySelector<HTMLElement>('.chart:not(.peek)'));
 }
 
 // ---------------------------------------------------------------------------
@@ -3253,6 +3273,8 @@ function route(): void {
   document.getElementById('gear')?.remove();
   if (follower) stopFollow();
   if (listening && !document.getElementById('listen')) listening = null;
+  // Notes belong to a chart; anywhere else they put themselves away.
+  if (!/^#\/(t|set)\//.test(h)) openChart(null);
   const set = h.match(/^#\/set\/([a-z0-9]{1,24})(?:\/(\d{1,4}))?$/);
   if (set) {
     void renderSet(set[1], Number(set[2] || 0));
@@ -3300,13 +3322,15 @@ window.addEventListener('afterprint', () => {
 
 // Keep the search a keystroke away from anywhere.
 window.addEventListener('keydown', (ev) => {
-  if (ev.key === '/' && !/^(INPUT|TEXTAREA)$/.test((ev.target as HTMLElement).tagName)) {
+  const into = ev.target as HTMLElement;
+  if (ev.key === '/' && !/^(INPUT|TEXTAREA)$/.test(into.tagName) && !into.isContentEditable) {
     ev.preventDefault();
     if (location.hash && location.hash !== '#/') location.hash = '#/';
     else (document.getElementById('q') as HTMLInputElement | null)?.focus();
   }
 });
 
+initNotes({ signedOut });
 route();
 
 if ('serviceWorker' in navigator) {
