@@ -147,7 +147,29 @@ const SESSION = 'chords_session';
  *
  *  If the binding is missing the answer is owner-only, never open: a
  *  misconfiguration must not turn into an unlocked door. */
+/** The person's name from the id_token. Sign-in asks for the standard OIDC
+ *  "profile" scope, which carries `name` (and may carry given_name and
+ *  family_name). `first_name` is the old Login Widget's field: reading only
+ *  that left every name empty while `picture`, also standard, came through. */
+export function nameFromClaims(c = {}) {
+  const parts = [c.given_name, c.family_name].filter((x) => typeof x === 'string' && x.trim());
+  const name = (typeof c.name === 'string' && c.name.trim()) || parts.join(' ') || c.first_name || '';
+  return String(name).trim().slice(0, 120) || null;
+}
+
+/** The person's Telegram user id, when the token carries one. The subject is
+ *  this app's own identifier and says nothing about which account it is. */
+function telegramIdFromClaims(c = {}) {
+  for (const k of ['id', 'telegram_id', 'user_id', 'tg_id']) {
+    const v = String(c[k] ?? '');
+    if (/^\d{4,20}$/.test(v)) return v;
+  }
+  return null;
+}
+
 async function authorize(env, sub, username, firstName, claims = {}) {
+  const picture = typeof claims.picture === 'string' ? claims.picture : null;
+  const telegramId = telegramIdFromClaims(claims);
   if (String(sub) === String(env.OWNER_SUB)) {
     return { authorized: true, role: 'admin' };
   }
@@ -162,6 +184,9 @@ async function authorize(env, sub, username, firstName, claims = {}) {
       user.lastSeen = new Date().toISOString();
       if (username) user.username = username;
       if (firstName) user.name = firstName;
+      // Kept current: people change their picture, and its link can expire.
+      if (picture) user.photo = picture;
+      if (telegramId) user.telegramId = telegramId;
       await kv.put(`user:${sub}`, JSON.stringify(user));
       return { authorized: true, role: user.role || 'user' };
     }
@@ -180,8 +205,8 @@ async function authorize(env, sub, username, firstName, claims = {}) {
         sub: String(sub),
         name: firstName || invite.name || null,
         username,
-        photo: invite.photo || null,
-        telegramId: invite.telegramId || null,
+        photo: picture || invite.photo || null,
+        telegramId: telegramId || invite.telegramId || null,
         role: invite.role === 'admin' ? 'admin' : 'user',
         status: 'active',
         addedAt: invite.invitedAt || new Date().toISOString(),
@@ -213,7 +238,8 @@ async function authorize(env, sub, username, firstName, claims = {}) {
       sub: String(sub),
       name: firstName || invite.name || null,
       username: username || null,
-      photo: typeof claims.picture === 'string' ? claims.picture : null,
+      photo: picture,
+      telegramId,
       role: invite.role === 'admin' ? 'admin' : 'user',
       status: 'active',
       addedAt: invite.invitedAt || new Date().toISOString(),
@@ -374,7 +400,7 @@ async function handle(ctx) {
     if (!claims || claims.error) return fail(`bad_token_${claims?.error || 'unknown'}`);
 
     const username = (claims.username || claims.preferred_username || '').toLowerCase();
-    const auth = await authorize(env, String(claims.sub), username, claims.first_name, claims);
+    const auth = await authorize(env, String(claims.sub), username, nameFromClaims(claims), claims);
     if (!auth.authorized) {
       // Report the subject we were given. Telegram may issue a PAIRWISE sub —
       // a different identifier per OAuth client — so it need not match the
@@ -390,7 +416,7 @@ async function handle(ctx) {
     const session = await signJwt(
       {
         sub: claims.sub,
-        name: claims.first_name || claims.username || 'Admin',
+        name: nameFromClaims(claims) || username || 'Admin',
         username,
         role: auth.role,
       },

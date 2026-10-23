@@ -1888,8 +1888,14 @@ function personRow(p: Person, actions: string): string {
     <li>
       ${avatar(p)}
       <span class="who">
-        <strong>${esc(p.name || p.username || 'Unknown')}</strong>
-        <span class="muted">${p.username ? '@' + esc(p.username) : sub}</span>
+        <strong>${esc(p.name || (p.username ? '@' + p.username : 'Name arrives at their next sign-in'))}</strong>
+        <span class="muted">${[
+          p.username ? '@' + esc(p.username) : '',
+          (p as { telegramId?: string }).telegramId ? `id ${esc((p as { telegramId?: string }).telegramId!)}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')}</span>
+        ${sub}
       </span>
       <span class="acts">${actions}</span>
     </li>`;
