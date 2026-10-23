@@ -12,6 +12,8 @@
 // written on; stored as an offset from that line, it moves with it. A mark
 // whose line is not shown (a tab line on piano) is not shown either.
 
+import { alertBox, confirmBox } from './dialog';
+
 export interface NotesHost {
   signedOut(): void;
   /** The chart's chord changes arrived from the server and differ from the
@@ -221,7 +223,7 @@ function save(leaving = false): Promise<void> {
       })
       .catch((e) => {
         status = 'offline';
-        if ((e as Error).message.startsWith('Too much ink')) alert((e as Error).message);
+        if ((e as Error).message.startsWith('Too much ink')) void alertBox((e as Error).message);
       })
       .finally(drawStatus)
   );
@@ -882,7 +884,7 @@ function drawPalette(): void {
     </div>
     <div class="ip-settings" ${settingsOpen ? '' : 'hidden'}>
       <label class="ip-check">
-        <input type="checkbox" data-act="pencil" ${prefs.pencilOnly ? 'checked' : ''}>
+        <input type="checkbox" role="switch" class="switch" data-act="pencil" ${prefs.pencilOnly ? 'checked' : ''}>
         <span><strong>Only draw with Apple Pencil</strong>
           <span class="muted small">Fingers scroll and tap as usual while drawing is on.</span></span>
       </label>
@@ -922,12 +924,19 @@ function wirePalette(el: HTMLElement): void {
       case 'pencil':
         return setPref('pencilOnly', (b as HTMLInputElement).checked);
       case 'clear':
-        if (!confirm('Erase all the ink on this chart? Typed notes are kept.')) return;
-        pushUndo();
-        doc.ink = [];
-        changed();
-        render();
-        return drawPalette();
+        void confirmBox('Typed notes and chord changes are kept. Undo brings the ink back.', {
+          title: 'Erase all the ink on this chart?',
+          ok: 'Erase',
+          danger: true,
+        }).then((ok) => {
+          if (!ok) return;
+          pushUndo();
+          doc.ink = [];
+          changed();
+          render();
+          drawPalette();
+        });
+        return;
       case 'done':
         return setDrawMode(false);
     }

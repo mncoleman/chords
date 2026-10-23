@@ -1031,8 +1031,8 @@ pre.lyric { color: var(--fg); }
   display: flex; flex-direction: column; gap: 0.6rem; max-width: 26rem;
 }
 .ip-settings[hidden] { display: none; }
-.ip-check { display: flex; gap: 0.6rem; align-items: flex-start; cursor: pointer; font-size: 0.88rem; }
-.ip-check input { margin-top: 0.2rem; accent-color: var(--accent); }
+.ip-check { display: flex; gap: 0.8rem; align-items: center; cursor: pointer; font-size: 0.88rem; }
+.ip-check .switch { order: 2; margin-left: auto; }
 .ip-check > span { display: flex; flex-direction: column; gap: 0.15rem; }
 .ink-palette .ip-settings .danger { justify-content: flex-start; height: auto; padding: 0.4rem 0.5rem; color: #f87171; }
 
@@ -1189,3 +1189,51 @@ pre.lyric { color: var(--fg); }
 }
 .foldname:hover { border-bottom-color: var(--line); }
 .foldname:focus { outline: none; border-bottom: 1px solid var(--accent); }
+
+/* ------------------------------------------------------------ switch ---- */
+/* An on/off setting, drawn rather than the system's checkbox. */
+input.switch {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 0; cursor: pointer;
+  position: relative; width: 2.75rem; height: 1.6rem; border-radius: 999px;
+  background: #2a2a30; border: 1px solid var(--line);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+input.switch::before {
+  content: ''; position: absolute; top: 2px; left: 2px; width: calc(1.6rem - 6px); height: calc(1.6rem - 6px);
+  border-radius: 50%; background: #c4c4cc; transition: transform 0.18s ease, background 0.18s ease;
+}
+input.switch:checked { background: var(--accent); border-color: var(--accent); }
+input.switch:checked::before { transform: translateX(1.15rem); background: var(--bg); }
+input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ------------------------------------------------------------ dialog ---- */
+/* The app's own confirm and alert (src/dialog.ts). */
+.dlg-back {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  padding: 1rem; background: rgba(0, 0, 0, 0.6); animation: dlg-fade 0.15s ease;
+}
+.dlg {
+  width: min(24rem, 100%); padding: 1.2rem 1.2rem 1rem; box-sizing: border-box;
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.6); font-family: var(--sans); color: var(--fg);
+  animation: dlg-rise 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.dlg-title { display: block; font-size: 1.05rem; margin-bottom: 0.4rem; }
+.dlg-msg { margin: 0 0 1.1rem; color: #b4b4bc; font-size: 0.92rem; line-height: 1.45; }
+.dlg-title + .dlg-msg { color: var(--muted); }
+.dlg-acts { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.dlg-acts button {
+  min-height: 2.75rem; padding: 0 1.1rem; border-radius: 10px; cursor: pointer;
+  font: inherit; font-size: 0.92rem; font-weight: 600;
+  border: 1px solid var(--line); background: transparent; color: var(--fg);
+}
+.dlg-acts button:hover { background: #1d1d21; }
+.dlg-acts .dlg-ok { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.dlg-acts .dlg-ok:hover { background: #a5e1fd; }
+.dlg-acts .dlg-ok.danger { background: #f87171; border-color: #f87171; color: #1a0b0b; }
+.dlg-acts .dlg-ok.danger:hover { background: #fca5a5; }
+.dlg-acts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes dlg-fade { from { opacity: 0; } }
+@keyframes dlg-rise { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@media (prefers-reduced-motion: reduce) { .dlg-back, .dlg { animation: none; } }
+@media print { .dlg-back { display: none !important; } }

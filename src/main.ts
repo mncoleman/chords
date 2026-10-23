@@ -11,6 +11,7 @@ import {
 } from './music';
 import { isChordToken, parseSheet, type ChordAt, type SheetLine } from './ug';
 import { Follower, buildSteps } from './follow';
+import { alertBox, confirmBox } from './dialog';
 import { chordEdits, initNotes, inkWantsTouch, mountInk, notesButtons, openChart, setChordEdit, wireNotesButtons } from './notes';
 
 /** Commit and build time, stamped in by vite. See buildStamp() there. */
@@ -1942,14 +1943,14 @@ async function adminPost(body: Record<string, unknown>): Promise<void> {
     if (res.status === 401) return signedOut();
     const data = await res.json();
     if (data.error) {
-      alert(data.error);
+      void alertBox(data.error);
       justSet.clear();
       justGone.clear();
       void refreshAdmin();
       return;
     }
   } catch {
-    alert('That did not reach the server. Check your connection.');
+    void alertBox('That did not reach the server. Check your connection.');
     justSet.clear();
     justGone.clear();
   }
@@ -2153,7 +2154,7 @@ function paintAdmin(): void {
     out.innerHTML = `<ul class="people">${personRow(found, '<button id="grant">Grant access</button>')}</ul>`;
     document.getElementById('grant')?.addEventListener('click', () => {
       if (!found.username) {
-        alert('That account has no @username, so an invitation cannot be matched when they sign in.');
+        void alertBox('That account has no @username, so an invitation cannot be matched when they sign in.');
         return;
       }
       justSet.set(found.username, { username: found.username, name: found.name, photo: found.photo });
@@ -2203,8 +2204,13 @@ function paintAdmin(): void {
     })
   );
   main.querySelectorAll<HTMLElement>('[data-remove]').forEach((b) =>
-    b.addEventListener('click', () => {
-      if (!confirm('Remove this person entirely?')) return;
+    b.addEventListener('click', async () => {
+      const ok = await confirmBox('They lose access, and their record goes with it.', {
+        title: 'Remove this person?',
+        ok: 'Remove',
+        danger: true,
+      });
+      if (!ok) return;
       justGone.add(String(b.dataset.remove));
       paintAdmin();
       void adminPost({ action: 'remove', sub: b.dataset.remove });
