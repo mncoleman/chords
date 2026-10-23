@@ -3224,6 +3224,48 @@ function chartParts(): { headline: string; body: string } {
 /** The whole chart view for the current chart, as markup. Also drawn, inert,
  *  for the songs either side of the one on screen in a set, so a swipe shows
  *  the next song sliding in rather than a blank. */
+/** The View sheet's open state, kept across redraws: every control in it
+ *  redraws the chart, and the sheet should stay up while it is being used. */
+let viewOpen = false;
+
+/** On a phone the toolbar keeps only what is reached for mid-song (the key,
+ *  letters or numbers); the settings chosen once per chart live here, in a
+ *  sheet from the bottom. It hangs off <body> rather than the chart, because
+ *  a set slides its charts with a transform, which would carry a fixed sheet
+ *  along with it. */
+function viewSheet(): string {
+  return `
+    <div id="view-sheet" class="viewsheet screen-only${viewOpen ? ' open' : ''}" ${viewOpen ? '' : 'inert'}>
+      <div class="vs-backdrop" data-close></div>
+      <div class="vs-panel" role="dialog" aria-modal="true" aria-labelledby="vs-title">
+        <div class="vs-grip" aria-hidden="true"></div>
+        <div class="vs-head">
+          <strong id="vs-title">View</strong>
+          <button class="vs-done" data-close>Done</button>
+        </div>
+        <div class="vs-row">
+          <span class="vs-lbl">Length</span>
+          <div class="ctl seg" role="group" aria-label="Chart length">
+            <button id="c-full-m" class="${condensed ? '' : 'on'}">Full</button>
+            <button id="c-short-m" class="${condensed ? 'on' : ''}">Short</button>
+          </div>
+        </div>
+        <div class="vs-row"><span class="vs-lbl">Instrument</span>${instSeg('-m')}</div>
+        <div class="vs-row"><span class="vs-lbl">Line spacing</span>${lhCtl('-m')}</div>
+        <div class="vs-row"><span class="vs-lbl">Columns</span>${colSeg('-m')}</div>
+        <button id="print-m" class="vs-print" aria-label="Print or save as PDF">Print / PDF</button>
+      </div>
+    </div>`;
+}
+
+function setViewOpen(open: boolean): void {
+  viewOpen = open;
+  const el = document.getElementById('view-sheet');
+  el?.classList.toggle('open', open);
+  el?.toggleAttribute('inert', !open);
+  document.getElementById('view-btn')?.setAttribute('aria-expanded', String(open));
+}
+
 function chartArticle(): string {
   if (!sheet) return '';
   const key = displayedKey();
@@ -3232,7 +3274,7 @@ function chartArticle(): string {
   const toolbar = `
     <div class="toolbar screen-only">
       <a class="back" href="${setCtx ? `#/folders/${esc(setCtx.fid)}` : '#/'}" title="${setCtx ? 'Back to the folder' : 'Back to search'}">←</a>
-      <div class="ctl">
+      <div class="ctl tr">
         <span class="lbl">Key</span>
         <strong class="key">${key ? esc(key) : '—'}</strong>
         <button id="tr-down" aria-label="Transpose down">−</button>
@@ -3244,7 +3286,7 @@ function chartArticle(): string {
         <button id="m-let" class="${numbers ? '' : 'on'}" aria-label="Show chords as letters"><span class="wide">Letters</span><span class="narrow">ABC</span></button>
         <button id="m-num" class="${numbers ? 'on' : ''}" ${effectiveKey() ? '' : 'disabled'} aria-label="Show chords as Nashville numbers"><span class="wide">Numbers</span><span class="narrow">123</span></button>
       </div>
-      <div class="ctl seg" role="group" aria-label="Chart length">
+      <div class="ctl seg len" role="group" aria-label="Chart length">
         <button id="c-full" class="${condensed ? '' : 'on'}" title="Every section with its chords">Full</button>
         <button id="c-short" class="${condensed ? 'on' : ''}" title="Chords once per section; later verses keep their words only">Short</button>
       </div>
@@ -3253,6 +3295,8 @@ function chartArticle(): string {
       ${colSeg('')}
       <div class="spacer"></div>
       <button id="print" class="primary" aria-label="Print or save as PDF">Print / PDF</button>
+      <button id="view-btn" class="viewbtn" aria-label="View settings" aria-haspopup="dialog"
+              aria-expanded="${viewOpen}" title="Length, instrument, spacing, columns, print">Aa</button>
     </div>`;
 
   const { headline, body } = chartParts();
@@ -3262,22 +3306,18 @@ function chartArticle(): string {
     <article class="chart${setCtx ? ' inset' : ''}">
       ${toolbar}
       <header class="masthead">
-        <div class="mh-tools screen-only">
-          ${instSeg('-m')}
-          ${lhCtl('-m')}
-          ${colSeg('-m')}
-          <button id="print-m" class="primary" aria-label="Print or save as PDF" title="Print or save as PDF">Print</button>
-        </div>
         ${setLine()}
         <div class="titlerow">
           <h1>${esc(sheet.song)}</h1>
-          ${saveControl()}
-          ${
-            myFeatures.includes('follow')
-              ? `<button id="follow-btn" class="savebtn screen-only${follower ? ' on' : ''}" title="Listen to the playing and keep the chart up with it">${follower ? '■ Stop following' : '♪ Follow'}</button>`
-              : ''
-          }
-          ${notesButtons()}
+          <div class="mh-acts">
+            ${saveControl()}
+            ${
+              myFeatures.includes('follow')
+                ? `<button id="follow-btn" class="savebtn screen-only${follower ? ' on' : ''}" title="Listen to the playing and keep the chart up with it">${follower ? '■ Stop following' : '♪ Follow'}</button>`
+                : ''
+            }
+            ${notesButtons()}
+          </div>
         </div>
         <p class="byline">${esc(sheet.artist)}</p>
         ${headline}
@@ -3295,6 +3335,8 @@ function drawSheet(): void {
   if (!sheet) return;
   syncSongOpts();
   main.innerHTML = chartArticle();
+  document.getElementById('view-sheet')?.remove();
+  document.body.insertAdjacentHTML('beforeend', viewSheet());
 
   const on = (id: string, fn: () => void) =>
     document.getElementById(id)?.addEventListener('click', fn);
@@ -3330,6 +3372,20 @@ function drawSheet(): void {
     condensed = true;
     drawSheet();
   });
+  on('c-full-m', () => {
+    if (!condensed) return;
+    condensed = false;
+    drawSheet();
+  });
+  on('c-short-m', () => {
+    if (condensed) return;
+    condensed = true;
+    drawSheet();
+  });
+  on('view-btn', () => setViewOpen(!viewOpen));
+  document.querySelectorAll('#view-sheet [data-close]').forEach((el) =>
+    el.addEventListener('click', () => setViewOpen(false))
+  );
   // Two steppers, one per breakpoint: the toolbar on a desktop, the masthead
   // on a phone, where that row has no width left.
   for (const sfx of ['', '-m']) {
@@ -3368,7 +3424,10 @@ function drawSheet(): void {
   // Two buttons, one per breakpoint: in the toolbar on a desktop, under the
   // title on a phone, where the toolbar has no width to spare. CSS shows one.
   on('print', printChart);
-  on('print-m', printChart);
+  on('print-m', () => {
+    setViewOpen(false);
+    printChart();
+  });
   wireSaveControl();
   wireSetChrome();
   wireFollow();
@@ -3383,6 +3442,8 @@ function drawSheet(): void {
 function route(): void {
   const h = location.hash || '#/';
   document.getElementById('gear')?.remove();
+  document.getElementById('view-sheet')?.remove();
+  viewOpen = false;
   if (follower) stopFollow();
   if (listening && !document.getElementById('listen')) listening = null;
   // Notes belong to a chart; anywhere else they put themselves away.

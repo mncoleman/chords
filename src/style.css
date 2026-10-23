@@ -150,14 +150,14 @@ a { color: inherit; text-decoration: none; }
 /* The masthead copies of these controls are named too: styling them by their
    container alone leaves them with the browser's default light chrome, which
    reads as broken on a dark page. It happened to Print first. */
-.toolbar button, .mh-tools .ctl button {
+.toolbar button, .viewsheet .ctl button {
   background: transparent; border: 0; color: var(--muted); cursor: pointer;
   padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.85rem; font-family: inherit;
 }
 .toolbar button:hover:not(:disabled),
-.mh-tools .ctl button:hover:not(:disabled) { color: var(--fg); background: var(--card); }
-.toolbar button:disabled, .mh-tools .ctl button:disabled { opacity: 0.35; cursor: default; }
-.toolbar button.on, .mh-tools .ctl button.on { background: var(--card); color: var(--fg); }
+.viewsheet .ctl button:hover:not(:disabled) { color: var(--fg); background: var(--card); }
+.toolbar button:disabled, .viewsheet .ctl button:disabled { opacity: 0.35; cursor: default; }
+.toolbar button.on, .viewsheet .ctl button.on { background: #1d1d21; color: var(--fg); }
 .toolbar button.primary { border: 1px solid var(--line); color: var(--fg); }
 
 /* Chord-over-lyric cells that WRAP. Hidden on wide screens and in print, where
@@ -188,6 +188,7 @@ a { color: inherit; text-decoration: none; }
    row instead — scrolling it sideways just moved the problem, cutting off the
    Letters/Numbers toggle. */
 .toolbar .narrow { display: none; }
+.toolbar .viewbtn { display: none; }
 
 @media screen and (max-width: 640px) {
   .toolbar {
@@ -216,15 +217,29 @@ a { color: inherit; text-decoration: none; }
   .toolbar .back { padding: 0 0.2rem; }
   #tr-down, #tr-up { min-width: 2.2rem; min-height: 2.4rem; }
 
-  /* On a phone the toolbar row is already full, so Print lives under the title
-     instead. The rule that shows it sits below, after its base styling — same
-     specificity, so it has to come later in the file to win. */
-  .toolbar #print { display: none; }
-  /* No width for a slider on a phone, and least need for one: a single column
-     that scrolls does not have to be made to fit anything. Columns goes for the
-     same reason — two of them do not fit a phone, so the choice is not real —
-     and with both gone the row fits again instead of wrapping to two. */
-  .toolbar .ctl.lh, .toolbar .ctl.cols, .toolbar .ctl.inst { display: none; }
+  /* On a phone the bar keeps only what is reached for mid-song: the key and
+     letters or numbers. Length, instrument, spacing, columns and Print are
+     chosen once per chart, and live in the View sheet behind "Aa". */
+  .toolbar #print, .toolbar .ctl.len, .toolbar .ctl.lh, .toolbar .ctl.cols, .toolbar .ctl.inst { display: none; }
+  .toolbar { flex-wrap: nowrap; gap: 0.45rem; }
+  .toolbar .spacer { display: none; }
+  .toolbar .back {
+    display: flex; align-items: center; justify-content: center; flex: none;
+    width: 2.75rem; height: 2.75rem; padding: 0;
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  /* The key, named, between its arrows: the line under the title says it too,
+     but this is the control that changes it. */
+  .toolbar .ctl.tr { flex: 1 1 auto; justify-content: space-between; height: 2.75rem; box-sizing: border-box; border-radius: 10px; }
+  .toolbar .ctl.tr .lbl { display: inline; margin-left: 0.2rem; }
+  .toolbar .ctl.tr .key { display: inline; order: 1; margin-right: auto; font-family: var(--sans); font-size: 1.05rem; }
+  .toolbar .ctl.tr .lbl { order: 1; margin-left: auto; margin-right: 0.3rem; }
+  .toolbar .ctl.tr #tr-down { order: 0; }
+  .toolbar .ctl.tr .shift { order: 2; }
+  .toolbar .ctl.tr #tr-up { order: 3; }
+  /* The reset only matters once the key has moved. */
+  .toolbar .ctl.tr .shift:disabled { display: none; }
+  .toolbar .ctl.seg { height: 2.75rem; box-sizing: border-box; border-radius: 10px; }
 
   /* The chart is the point; the header should not cost half the screen. */
   /* The masthead's own phone rules live below, after its base styling — same
@@ -237,48 +252,18 @@ a { color: inherit; text-decoration: none; }
     border: 1px solid var(--line);
   }
 
+  .toolbar .viewbtn {
+    display: flex; align-items: center; justify-content: center; flex: none;
+    width: 2.75rem; height: 2.75rem; padding: 0;
+    border: 1px solid var(--line); border-radius: 10px;
+    color: var(--fg); font-size: 1rem; font-weight: 600;
+  }
+  .toolbar .viewbtn[aria-expanded="true"] { color: var(--accent); background: #1d1d21; }
+
   /* Read it while playing: the chart must never scroll sideways. */
   .fixed { display: none; }
   .flow { display: block; line-height: var(--lh, 1.4); }
   pre.chords, pre.lyric { overflow-x: hidden; }
-}
-
-/* Outside the toolbar this lost the toolbar's button styling and fell back to
-   the browser's default light chrome, which reads as broken on a dark page.
-   Same treatment as the controls above it. Hidden on wide screens, where the
-   toolbar has room to carry Print itself. */
-.masthead #print-m {
-  display: none;
-  background: transparent; color: var(--fg); cursor: pointer;
-  border: 1px solid var(--line); border-radius: 8px;
-  padding: 0.5rem 0.9rem; font: inherit; font-size: 0.84rem;
-}
-.masthead #print-m:hover { background: var(--card); }
-
-/* Line spacing, Columns and Print live in the toolbar everywhere but a phone,
-   where that row is full at four groups. There they share one right-aligned
-   row above the title — cheaper than the row Print used to take on its own,
-   and the sticky toolbar stays a single line. */
-.mh-tools { display: none; }
-
-@media screen and (max-width: 640px) {
-  .mh-tools {
-    display: flex; align-items: center; justify-content: flex-end;
-    /* With the instrument toggle it only just fits a 375 phone; narrower ones
-       take a second row rather than crushing Print into three lines. */
-    flex-wrap: wrap;
-    gap: 0.5rem; margin-bottom: 0.7rem;
-  }
-  .masthead #print-m { display: block; margin: 0; white-space: nowrap; }
-  /* Labels are dropped from the toolbar for width; here there is room, and a
-     bare slider says nothing about what it does. */
-  .mh-tools .ctl .lbl { display: inline; }
-  .mh-tools .ctl.lh .lbl { display: none; }
-  /* A slider needs saying what it is; 1 and 2 next to a chart do not, and the
-     word costs the row more width than a 320px phone has to give. */
-  .mh-tools .ctl.cols .lbl { display: none; }
-  /* Thumb-sized, like the toolbar's own. */
-  .mh-tools .ctl button { min-height: 2.2rem; padding: 0.3rem 0.6rem; font-size: 0.82rem; }
 }
 
 /* Links carried in from the chart text (UG preambles cite YouTube) and the
@@ -298,7 +283,26 @@ a.ext:hover { color: var(--fg); }
 .masthead .facts { text-align: right; }
 .masthead .facts .meta { margin: 0.15rem 0 0; white-space: nowrap; }
 
+/* Save, Follow, Draw and Notes sit beside the title on a wide screen. */
+.mh-acts { display: contents; }
+
 @media screen and (max-width: 640px) {
+  /* On a phone: the title, who it is by and the key first, then the four
+     actions as one row of equal buttons, rather than wrapping wherever the
+     title's length happened to leave room. */
+  .masthead { display: flex; flex-direction: column; }
+  .masthead .titlerow { display: contents; }
+  .masthead .mh-acts {
+    order: 5; display: flex; gap: 0.5rem; margin-top: 1rem;
+  }
+  .masthead .mh-acts > * { flex: 1 1 0; min-width: 0; }
+  .masthead .mh-acts .savebtn {
+    width: 100%; height: 2.6rem; padding: 0 0.4rem;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+    overflow: hidden; text-overflow: ellipsis; font-size: 0.85rem; color: #c4c4cc;
+  }
+  .masthead .mh-acts .savebtn.on { color: var(--accent); }
+  .masthead .mh-acts .savebtn .ico { margin-right: 0; flex: none; }
   /* No width for two columns of header; the facts go under the key. */
   .masthead .headline { display: block; }
   .masthead .facts { text-align: left; }
@@ -880,10 +884,6 @@ pre.lyric { color: var(--fg); }
   width: 15px; height: 15px; vertical-align: -3px; margin-right: 0.3rem;
   fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
 }
-@media (max-width: 640px) {
-  #draw-btn span, #notes-btn span { display: none; }
-  #draw-btn .ico, #notes-btn .ico { margin-right: 0; }
-}
 
 /* The drawer slides from the right edge. Its handle stays on screen when it
    is put away, so it can be pulled back out; open, it stays open from chart
@@ -953,7 +953,7 @@ pre.lyric { color: var(--fg); }
 .ink.drawing.pencil { touch-action: pan-x pan-y pinch-zoom; }
 /* The chart's own controls stay on top of the ink, so they still work with
    the pen out. (The toolbar is sticky and already above it.) */
-.chart.inkable .mh-tools, .chart.inkable .titlerow > :not(h1) { position: relative; z-index: 5; }
+.chart.inkable .mh-acts > * { position: relative; z-index: 5; }
 .ink.drawing.tool-text { cursor: text; }
 .ink.drawing.tool-erase { cursor: cell; }
 .ink.drawing.tool-text .ink-text { outline: 1px dotted color-mix(in srgb, currentColor 50%, transparent); }
@@ -1051,3 +1051,45 @@ pre.lyric { color: var(--fg); }
 .autocomplete .sk-row + .sk-row { border-top: 0; }
 .autocomplete .sk-o { height: 0.55rem; margin-top: 0.3rem; opacity: 0.7; }
 @media print { .skeleton, .sk-row { display: none !important; } }
+
+/* -------------------------------------------------------- view sheet ---- */
+/* Phone only: the settings that are chosen once per chart, behind "Aa". */
+.viewsheet { display: none; }
+@media screen and (max-width: 640px) {
+  .viewsheet { display: block; position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+  .viewsheet.open { pointer-events: auto; }
+  .vs-backdrop {
+    position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55);
+    opacity: 0; transition: opacity 0.22s ease;
+  }
+  .viewsheet.open .vs-backdrop { opacity: 1; }
+  .vs-panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column; gap: 0.85rem;
+    padding: 0.6rem 1.25rem calc(1.4rem + env(safe-area-inset-bottom, 0px));
+    background: var(--card); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.5);
+    transform: translateY(100%); transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .viewsheet.open .vs-panel { transform: translateY(0); }
+  .vs-grip { width: 40px; height: 5px; border-radius: 3px; background: #3a3a40; align-self: center; }
+  .vs-head { display: flex; align-items: center; justify-content: space-between; }
+  .vs-head strong { font-size: 1.05rem; }
+  .vs-done {
+    background: transparent; border: 0; color: var(--accent); cursor: pointer;
+    font: inherit; font-size: 0.95rem; font-weight: 600; min-height: 2.75rem; padding: 0 0.25rem;
+  }
+  .vs-row { display: grid; grid-template-columns: 7rem minmax(0, 1fr); align-items: center; gap: 0.75rem; }
+  .vs-lbl { color: #a1a1aa; font-size: 0.9rem; }
+  .viewsheet .ctl {
+    height: 2.75rem; box-sizing: border-box; border-radius: 10px; padding: 3px; gap: 2px;
+  }
+  .viewsheet .ctl .lbl { display: none; }
+  .viewsheet .ctl button { flex: 1; min-height: 2.25rem; font-size: 0.9rem; border-radius: 7px; }
+  .viewsheet .ctl.lh .lhv { flex: 1; }
+  .vs-print {
+    margin-top: 0.4rem; min-height: 3rem; border: 0; border-radius: 12px; cursor: pointer;
+    background: var(--accent); color: var(--bg); font: inherit; font-size: 0.95rem; font-weight: 600;
+  }
+}
+@media print { .viewsheet { display: none !important; } }
