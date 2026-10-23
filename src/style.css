@@ -134,6 +134,16 @@ a { color: inherit; text-decoration: none; }
 }
 .ctl .lbl { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .ctl .key { font-family: var(--mono); }
+/* Wide enough for the widest key name (F#m, Bbm), so − and + after it do not
+   move as the key changes. */
+.toolbar .ctl.tr .key { display: inline-block; min-width: 3.2ch; text-align: center; }
+.toolbar .ctl.tr .shift { min-width: 2.4rem; }
+.gp-seg .ico { width: 16px; height: 16px; vertical-align: -3px; margin-right: 0.25rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ctl.inst button { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; }
+.ctl.inst .ico {
+  width: 18px; height: 18px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
 /* 1 and 2 beside a chart say what they are, and the word cost the toolbar the
    width the instrument toggle needs to keep Print on the same row. */
 .toolbar .ctl.cols .lbl { display: none; }
@@ -230,13 +240,31 @@ a { color: inherit; text-decoration: none; }
   }
   /* The key, named, between its arrows: the line under the title says it too,
      but this is the control that changes it. */
-  .toolbar .ctl.tr { flex: 1 1 auto; justify-content: space-between; height: 2.75rem; box-sizing: border-box; border-radius: 10px; }
-  .toolbar .ctl.tr .lbl { display: inline; margin-left: 0.2rem; }
-  .toolbar .ctl.tr .key { display: inline; order: 1; margin-right: auto; font-family: var(--sans); font-size: 1.05rem; }
-  .toolbar .ctl.tr .lbl { order: 1; margin-left: auto; margin-right: 0.3rem; }
-  .toolbar .ctl.tr #tr-down { order: 0; }
-  .toolbar .ctl.tr .shift { order: 2; }
-  .toolbar .ctl.tr #tr-up { order: 3; }
+  /* − and + never move. The control's width comes from the row, not from
+     what it holds (flex-basis 0), and − and + sit in fixed end columns of a
+     grid; only the middle changes as C becomes Db or F#m. Once transposed,
+     the offset (the reset) sits small under the key rather than beside it,
+     which a 375 phone has no width for. The word "Key" goes for the same
+     reason. */
+  .toolbar .ctl.tr {
+    flex: 1 1 0; display: grid; align-items: center;
+    grid-template-columns: 2.5rem minmax(0, 1fr) 2.5rem;
+    grid-template-rows: minmax(0, 1fr) auto;
+    column-gap: 0.2rem; height: 2.75rem; box-sizing: border-box; border-radius: 10px;
+  }
+  .toolbar .ctl.tr .lbl { display: none; }
+  .toolbar .ctl.tr #tr-down { grid-column: 1; grid-row: 1 / span 2; }
+  .toolbar .ctl.tr #tr-up { grid-column: 3; grid-row: 1 / span 2; }
+  .toolbar .ctl.tr .key {
+    display: block; grid-column: 2; grid-row: 1; align-self: end; text-align: center;
+    font-family: var(--sans); font-size: 1.05rem; line-height: 1.1; white-space: nowrap; min-width: 0;
+  }
+  .toolbar .ctl.tr:has(.shift:disabled) .key { grid-row: 1 / span 2; align-self: center; }
+  .toolbar .ctl.tr .shift {
+    grid-column: 2; grid-row: 2; align-self: start; justify-self: center;
+    min-width: 0; min-height: 0 !important; padding: 0 0.3rem !important; font-size: 0.66rem; line-height: 1.2;
+  }
+  .toolbar .ctl.tr #tr-down, .toolbar .ctl.tr #tr-up { min-width: 0; width: 2.5rem; }
   /* The reset only matters once the key has moved. */
   .toolbar .ctl.tr .shift:disabled { display: none; }
   .toolbar .ctl.seg { height: 2.75rem; box-sizing: border-box; border-radius: 10px; }

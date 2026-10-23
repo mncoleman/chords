@@ -1348,7 +1348,7 @@ function openGear(): void {
         <button id="gp-close" class="gp-close" aria-label="Close">×</button>
       </div>
       <p class="gp-note">Every song in ${esc(f.name)} uses these, unless you changed that song on its own.</p>
-      <label class="gp-row"><span>Instrument</span>${seg('instrument', [['piano', '🎹 Piano'], ['guitar', '🎸 Guitar']], b.instrument)}</label>
+      <label class="gp-row"><span>Instrument</span>${seg('instrument', [['piano', `${PIANO_SVG} Piano`], ['guitar', `${GUITAR_SVG} Guitar`]], b.instrument)}</label>
       <label class="gp-row"><span>Chords</span>${seg('numbers', [['false', 'Letters'], ['true', 'Numbers']], String(b.numbers))}</label>
       <label class="gp-row"><span>Length</span>${seg('condensed', [['false', 'Full'], ['true', 'Short']], String(b.condensed))}</label>
       <label class="gp-row"><span>Columns</span>${seg('columns', [['1', '1'], ['2', '2']], String(b.columns))}</label>
@@ -3112,10 +3112,19 @@ const colSeg = (sfx: string) => `
     <button id="col-2${sfx}" class="${columns === 2 ? 'on' : ''}" title="Two columns">2</button>
   </div>`;
 
+/** Drawn, not emoji: an emoji is a colour picture in a monochrome toolbar,
+ *  and looks different on every platform. */
+const PIANO_SVG =
+  '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M8 5v14M12 5v14M16 5v14"/><path d="M6.5 5v7.5h3V5M14.5 5v7.5h3V5" fill="currentColor"/></svg>';
+const GUITAR_SVG =
+  '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 10.5L20 4"/><path d="M18.5 2.5l3 3"/><path d="M11.6 8.6c-1.4-.7-3.3-.4-4.4.8-.8.8-.9 1.8-1.7 2.4-.9.6-2.2.6-2.9 1.6-1.2 1.6-.4 4.6 1.6 6.4 1.9 1.9 4.9 2.7 6.4 1.5 1-.7 1-2 1.6-2.9.6-.8 1.6-.9 2.4-1.7 1.2-1.1 1.5-3 .8-4.4"/><circle cx="9.5" cy="14.5" r="1.6"/></svg>';
+
+/** The instrument toggle: icons alone in the toolbar, icon and name in the
+ *  phone's View sheet, which has the room. */
 const instSeg = (sfx: string) => `
   <div class="ctl seg inst" role="group" aria-label="Instrument">
-    <button id="i-piano${sfx}" class="${instrument === 'piano' ? 'on' : ''}" title="Piano: chords as they sound, no capo or tab" aria-label="Piano">🎹</button>
-    <button id="i-guitar${sfx}" class="${instrument === 'guitar' ? 'on' : ''}" title="Guitar: chords as UG prints them, with capo and tab" aria-label="Guitar">🎸</button>
+    <button id="i-piano${sfx}" class="${instrument === 'piano' ? 'on' : ''}" title="Piano: chords as they sound, no capo or tab" aria-label="Piano">${PIANO_SVG}${sfx ? '<span>Piano</span>' : ''}</button>
+    <button id="i-guitar${sfx}" class="${instrument === 'guitar' ? 'on' : ''}" title="Guitar: chords as UG prints them, with capo and tab" aria-label="Guitar">${GUITAR_SVG}${sfx ? '<span>Guitar</span>' : ''}</button>
   </div>`;
 
 /** Line spacing is stepped, not slid: a slider was fiddly under a thumb. */
