@@ -435,6 +435,51 @@ export function setChordEdit(key: string, symbol: string | null): void {
 }
 
 // ---------------------------------------------------------------------------
+// Printing the markups
+// ---------------------------------------------------------------------------
+
+/** What the open chart carries beyond the chart itself. */
+export function markups(): { ink: number; text: string; chords: number } {
+  return { ink: chartId ? doc.ink.length : 0, text: chartId ? doc.text : '', chords: Object.keys((chartId && doc.chords) || {}).length };
+}
+
+/** Draw the ink onto a printed copy of the chart. Each mark goes onto the
+ *  printed copy of the line it is pinned to, scaled by how much smaller the
+ *  printed type is, so it lands on (or near) the words it was drawn on; the
+ *  printed font is not the screen's, so it is close rather than exact. Marks
+ *  pinned to the chart's top go onto the article itself. */
+export function inkForPrint(root: Element, article: Element, scale: number): void {
+  clearInkForPrint();
+  const groups = new Map<number, number[]>();
+  doc.ink.forEach((it, i) => {
+    const g = groups.get(it.a) ?? [];
+    g.push(i);
+    groups.set(it.a, g);
+  });
+  for (const [a, items] of groups) {
+    const host = a === -1 ? article : root.querySelector(`.pair[data-src="${a}"]`);
+    if (!host) continue;
+    const box = document.createElement('div');
+    box.className = 'ink-print';
+    box.style.transform = `scale(${a === -1 ? 1 : scale})`;
+    let paths = '';
+    let texts = '';
+    for (const i of items) {
+      const it = doc.ink[i];
+      if (it.k === 's') paths += strokeEl(it, { x: 0, y: 0 }, i);
+      else
+        texts += `<div class="ink-text" style="left:${it.x}px;top:${it.y}px;color:${it.c};font-size:${it.s}px">${esc(it.t)}</div>`;
+    }
+    box.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>${texts}`;
+    host.appendChild(box);
+  }
+}
+
+export function clearInkForPrint(): void {
+  document.querySelectorAll('.ink-print').forEach((x) => x.remove());
+}
+
+// ---------------------------------------------------------------------------
 // Ink: where things go
 // ---------------------------------------------------------------------------
 

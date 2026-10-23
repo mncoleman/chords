@@ -12,7 +12,19 @@ import {
 import { isChordToken, parseSheet, type ChordAt, type SheetLine } from './ug';
 import { Follower, buildSteps } from './follow';
 import { alertBox, confirmBox } from './dialog';
-import { chordEdits, initNotes, inkWantsTouch, mountInk, notesButtons, openChart, setChordEdit, wireNotesButtons } from './notes';
+import {
+  chordEdits,
+  clearInkForPrint,
+  initNotes,
+  inkForPrint,
+  inkWantsTouch,
+  markups,
+  mountInk,
+  notesButtons,
+  openChart,
+  setChordEdit,
+  wireNotesButtons,
+} from './notes';
 
 /** Commit and build time, stamped in by vite. See buildStamp() there. */
 declare const __BUILD__: string;
@@ -3251,9 +3263,127 @@ function packColumns(heights: number[], mastheadMm: number): number[][][] {
  *  browser that fires beforeprint as well as the button being pressed, rebuilds
  *  rather than doubling. */
 function buildPrintPages(): void {
+  // Printing without chord changes means drawing the chart without them;
+  // after printing it is drawn with them again.
+  const m = markups();
+  const plainChords = m.chords > 0 && !(printWith && printOpts.chords);
+  if (plainChords !== hideChordEdits && sheet) {
+    hideChordEdits = plainChords;
+    drawSheet();
+  }
   clearPrintPages();
-  const article = main.querySelector('.chart');
-  if (article) paginate(article, lineHeight, columns);
+  const article = main.querySelector('.chart:not(.peek)');
+  if (!article) return;
+  paginate(article, lineHeight, columns);
+  if (!printWith) return;
+  if (printOpts.ink && m.ink) {
+    const paged = article.querySelector('.paged');
+    // Printed type is smaller than the screen's: 9.5pt in two columns,
+    // 10.5pt in one. The marks shrink with it.
+    const screenPx = parseFloat(getComputedStyle(article.querySelector('.sheet') ?? article).fontSize) || 14.7;
+    inkForPrint(paged ?? article.querySelector('.sheet')!, article, ((paged ? 9.5 : 10.5) * (96 / 72)) / screenPx);
+  }
+  if (printOpts.notes && m.text.trim()) {
+    const notes = document.createElement('section');
+    notes.className = 'print-notes';
+    notes.innerHTML = `<h2>Notes</h2><div class="pn-text">${esc(m.text.trim())}</div>`;
+    article.appendChild(notes);
+  }
+}
+
+/** Whether to print the reader's own markups, and which. Asked when a chart
+ *  has any, and remembered for the next print (and for a print started from
+ *  the browser's menu, which cannot ask). */
+interface PrintMarkups {
+  ink: boolean;
+  notes: boolean;
+  chords: boolean;
+}
+let printWith = remembered('printWithMarkups', true, (v) => typeof v === 'boolean');
+let printOpts = remembered<PrintMarkups>(
+  'printMarkups',
+  { ink: true, notes: true, chords: true },
+  (v) => !!v && typeof v === 'object'
+);
+/** Drawing the chart without the reader's chord changes, for a plain print. */
+let hideChordEdits = false;
+
+/** Print, asking first when the chart carries markups. */
+async function startPrint(): Promise<void> {
+  const m = markups();
+  const has = { ink: m.ink > 0, notes: !!m.text.trim(), chords: m.chords > 0 };
+  if (!has.ink && !has.notes && !has.chords) return printChart();
+  const choice = await askPrintMarkups(has);
+  if (!choice) return;
+  printWith = choice.with;
+  printOpts = { ...printOpts, ...choice.opts };
+  remember('printWithMarkups', printWith);
+  remember('printMarkups', printOpts);
+  printChart();
+}
+
+function askPrintMarkups(has: PrintMarkups): Promise<{ with: boolean; opts: Partial<PrintMarkups> } | null> {
+  document.getElementById('app-dialog')?.remove();
+  const back = document.createElement('div');
+  back.id = 'app-dialog';
+  back.className = 'dlg-back';
+  const row = (k: keyof PrintMarkups, label: string, hint: string) =>
+    has[k]
+      ? `<label class="pc-row"><span><strong>${label}</strong><span class="muted small">${hint}</span></span>
+           <input type="checkbox" role="switch" class="switch" data-k="${k}" ${printOpts[k] ? 'checked' : ''}></label>`
+      : '';
+  back.innerHTML = `
+    <div class="dlg pdlg" role="dialog" aria-modal="true" aria-labelledby="pdlg-title">
+      <strong id="pdlg-title" class="dlg-title">Print this chart</strong>
+      <label class="pc-opt"><input type="radio" name="pm" value="plain" ${printWith ? '' : 'checked'}>
+        <span><strong>Without markups</strong><span class="muted small">The chart as Ultimate Guitar has it.</span></span></label>
+      <label class="pc-opt"><input type="radio" name="pm" value="with" ${printWith ? 'checked' : ''}>
+        <span><strong>With markups</strong><span class="muted small">Choose which:</span></span></label>
+      <div class="pc-sub">
+        ${row('ink', 'Drawings', 'Ink and text boxes, on their lines')}
+        ${row('notes', 'Notes', 'Printed under the chart')}
+        ${row('chords', 'Modified chords', 'Your chords, with the originals beside them')}
+      </div>
+      <div class="dlg-acts">
+        <button class="dlg-cancel">Cancel</button>
+        <button class="dlg-ok">Print</button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  const sub = back.querySelector<HTMLElement>('.pc-sub')!;
+  const sync = () => {
+    const w = back.querySelector<HTMLInputElement>('input[value="with"]')!.checked;
+    sub.classList.toggle('off', !w);
+    sub.querySelectorAll<HTMLInputElement>('input').forEach((i) => (i.disabled = !w));
+  };
+  sync();
+  back.addEventListener('change', sync);
+  return new Promise((resolve) => {
+    const done = (v: { with: boolean; opts: Partial<PrintMarkups> } | null) => {
+      back.remove();
+      document.removeEventListener('keydown', key, true);
+      resolve(v);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        done(null);
+      }
+    };
+    document.addEventListener('keydown', key, true);
+    back.addEventListener('click', (e) => {
+      if (e.target === back) done(null);
+    });
+    back.querySelector('.dlg-cancel')!.addEventListener('click', () => done(null));
+    back.querySelector('.dlg-ok')!.addEventListener('click', () => {
+      const opts: Partial<PrintMarkups> = {};
+      sub.querySelectorAll<HTMLInputElement>('input[data-k]').forEach((i) => {
+        opts[i.dataset.k as keyof PrintMarkups] = i.checked;
+      });
+      done({ with: back.querySelector<HTMLInputElement>('input[value="with"]')!.checked, opts });
+    });
+    back.querySelector<HTMLElement>('.dlg-ok')!.focus();
+  });
 }
 
 /** Lay one chart's sections out as printed pages, inside its own article. A
@@ -3311,6 +3441,8 @@ function paginate(article: Element, lh: number, cols: 1 | 2): void {
 function clearPrintPages(): void {
   main.querySelector('.paged')?.remove();
   main.querySelector('.chart')?.classList.remove('paginated');
+  main.querySelectorAll('.print-notes').forEach((x) => x.remove());
+  clearInkForPrint();
 }
 
 /** Lay the pages out, print, and take them away again. They are built at the
@@ -3413,7 +3545,7 @@ function chartParts(): { headline: string; body: string } {
   const { facts, chart } = displayedChart();
 
   // The reader's own chord changes for this chart.
-  const edits = chordEdits(String(sheet.id));
+  const edits = hideChordEdits ? {} : chordEdits(String(sheet.id));
   const renderLine = (l: SheetLine): string => {
     const src = lineSrc.get(l);
     const row = l.chords.length ? chordRow(l.chords, src, edits) : '';
@@ -3668,10 +3800,10 @@ function drawSheet(): void {
   }
   // Two buttons, one per breakpoint: in the toolbar on a desktop, under the
   // title on a phone, where the toolbar has no width to spare. CSS shows one.
-  on('print', printChart);
+  on('print', () => void startPrint());
   on('print-m', () => {
     setViewOpen(false);
-    printChart();
+    void startPrint();
   });
   wireSaveControl();
   wireSetChrome();
@@ -3744,6 +3876,11 @@ window.addEventListener('beforeprint', () => {
 });
 window.addEventListener('afterprint', () => {
   clearPrintPages();
+  // The chart was drawn without the reader's chord changes for the print.
+  if (hideChordEdits) {
+    hideChordEdits = false;
+    if (sheet) drawSheet();
+  }
   clearSetPrint();
 });
 
