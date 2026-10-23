@@ -63,9 +63,19 @@ function cleanNotes(body) {
     if (ok) ink.push(ok);
     if (ink.length >= MAX_ITEMS) break;
   }
+  // Chord changes: "<line>:<chord>" -> a chord symbol, a few hundred at most.
+  const chords = {};
+  if (body?.chords && typeof body.chords === 'object') {
+    for (const [k, v] of Object.entries(body.chords).slice(0, 500)) {
+      if (/^\d{1,6}:\d{1,3}$/.test(k) && typeof v === 'string' && /^(N\.?C\.?|[A-G][#b]?[^\s<>"'&]{0,15})$/.test(v)) {
+        chords[k] = v;
+      }
+    }
+  }
   return {
     text: typeof body?.text === 'string' ? body.text.slice(0, MAX_TEXT) : '',
     ink,
+    chords,
     updated: num(body?.updated, 0, 1e14) ? body.updated : Date.now(),
   };
 }
@@ -110,7 +120,7 @@ export async function onRequestGet(ctx) {
     /* treated as nothing saved */
   }
   if (t.prefs) return json(cleanPrefs(body));
-  return json(body ? cleanNotes(body) : { text: '', ink: [], updated: 0 });
+  return json(body ? cleanNotes(body) : { text: '', ink: [], chords: {}, updated: 0 });
 }
 
 export async function onRequestPut(ctx) {
@@ -130,7 +140,7 @@ export async function onRequestPut(ctx) {
   const out = JSON.stringify(clean);
   if (out.length > MAX_BYTES) return json({ error: 'Too much ink on one chart. Erase some and try again.' }, 413);
   // A chart with nothing on it is not worth keeping a key for.
-  if (!t.prefs && !clean.text && !clean.ink.length) await kv.delete(t.key);
+  if (!t.prefs && !clean.text && !clean.ink.length && !Object.keys(clean.chords).length) await kv.delete(t.key);
   else await kv.put(t.key, out);
   return json(clean);
 }

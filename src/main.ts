@@ -1,4 +1,5 @@
 import './style.css';
+import { Note } from '@tonaljs/tonal';
 import {
   inferKey,
   intervalForSemitones,
@@ -8,9 +9,9 @@ import {
   transposeSymbol,
   writtenTonic,
 } from './music';
-import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
+import { isChordToken, parseSheet, type ChordAt, type SheetLine } from './ug';
 import { Follower, buildSteps } from './follow';
-import { initNotes, inkWantsTouch, mountInk, notesButtons, openChart, wireNotesButtons } from './notes';
+import { chordEdits, initNotes, inkWantsTouch, mountInk, notesButtons, openChart, setChordEdit, wireNotesButtons } from './notes';
 
 /** Commit and build time, stamped in by vite. See buildStamp() there. */
 declare const __BUILD__: string;
@@ -2760,10 +2761,208 @@ function collapseBlanks(out: SheetLine[]): SheetLine[] {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Chord changes: the reader swaps one chord for another. The new one sits
+// where the old one was; the old one stays beside it, small and grey, so the
+// change is never mistaken for what the chart says.
+// ---------------------------------------------------------------------------
+
+/** One chord as shown, and the markup around it. `key` ("<line>:<index>")
+ *  is null where the line cannot be told apart, and then it is not tappable. */
+function chordView(
+  c: ChordAt,
+  key: string | null,
+  edits: Record<string, string>
+): { label: string; wrap: (html: string) => string } {
+  const changed = key ? edits[key] : undefined;
+  const label = renderSymbol(changed ?? c.symbol);
+  if (!key) return { label, wrap: (h) => h };
+  if (!changed) return { label, wrap: (h) => `<span class="cs" data-c="${key}">${h}</span>` };
+  const was = numberMarkup(esc(renderSymbol(c.symbol)));
+  return {
+    label,
+    wrap: (h) => `<span class="cs chg" data-c="${key}">${h}<span class="was" aria-label="was">${was}</span></span>`,
+  };
+}
+
+/** A chord row for the exact <pre> layout: each chord at its column, as
+ *  ugs layoutChords places them, but built as markup so each can be tapped.
+ *  Columns are counted on the plain labels; the markup adds no width. */
+function chordRow(chords: ChordAt[], src: number | undefined, edits: Record<string, string>): string {
+  let plain = '';
+  let html = '';
+  chords
+    .map((c, i) => ({ c, v: chordView(c, src === undefined ? null : `${src}:${i}`, edits) }))
+    .sort((a, b) => a.c.at - b.c.at)
+    .forEach(({ c, v }) => {
+      const pad = c.at < plain.length ? ' ' : ' '.repeat(c.at - plain.length);
+      plain += pad + v.label;
+      html += pad + v.wrap(numberMarkup(esc(v.label)));
+    });
+  return html;
+}
+
+const PICK_ROOTS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+const PICK_QUALS = ['', 'm', '7', 'm7', 'maj7', 'sus4', 'sus2', 'add9', '6', '9', 'dim', 'aug'];
+
+/** The picker for one chord. Chosen in letters at the key on screen, and
+ *  stored back in the chart's own key, so it transposes with everything else. */
+function openChordPicker(el: HTMLElement): void {
+  if (!sheet) return;
+  const key = el.dataset.c!;
+  const [srcS, idxS] = key.split(':');
+  const line = lines[Number(srcS)];
+  const orig = line?.chords[Number(idxS)];
+  if (!orig) return;
+  const shift = intervalForSemitones(semitones + capoShift());
+  const back = intervalForSemitones(-(semitones + capoShift()));
+  const edits = chordEdits(String(sheet.id));
+  const origShown = transposeSymbol(orig.symbol, shift);
+  let symbol = transposeSymbol(edits[key] ?? orig.symbol, shift);
+
+  const parse = (sym: string) => {
+    const m = sym.match(/^([A-G][#b]?)(.*?)(?:\/([A-G][#b]?))?$/);
+    return m ? { root: m[1], qual: m[2], bass: m[3] || '' } : { root: '', qual: '', bass: '' };
+  };
+  const enh = (n: string) => Note.chroma(n);
+
+  closeChordPicker();
+  const pop = document.createElement('div');
+  pop.id = 'chord-pick';
+  pop.className = 'cpick screen-only';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'Change chord');
+  document.body.appendChild(pop);
+
+  const draw = () => {
+    const p = parse(symbol);
+    const known = PICK_QUALS.includes(p.qual);
+    pop.innerHTML = `
+      <div class="cp-head">
+        <strong>Change chord</strong>
+        <span class="muted small">Chart says ${esc(origShown)}</span>
+        <button class="cp-x" data-act="close" aria-label="Close">×</button>
+      </div>
+      <div class="cp-grid" role="group" aria-label="Root">
+        ${PICK_ROOTS.map((r) => `<button data-root="${r}" class="${p.root && enh(p.root) === enh(r) ? 'on' : ''}">${r}</button>`).join('')}
+      </div>
+      <div class="cp-grid" role="group" aria-label="Type">
+        ${PICK_QUALS.map((q) => `<button data-qual="${q}" class="${known && p.qual === q ? 'on' : ''}">${q || 'maj'}</button>`).join('')}
+      </div>
+      <div class="cp-row">
+        <label class="cp-bass">Bass
+          <select data-act="bass">
+            <option value="">none</option>
+            ${PICK_ROOTS.map((r) => `<option value="${r}" ${p.bass && enh(p.bass) === enh(r) ? 'selected' : ''}>/${r}</option>`).join('')}
+          </select>
+        </label>
+        <input data-act="text" value="${esc(symbol)}" aria-label="Chord" autocomplete="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <p class="cp-err" hidden>That is not a chord this chart can read.</p>
+      <div class="cp-acts">
+        ${edits[key] ? '<button data-act="reset" class="cp-reset">Use the original</button>' : ''}
+        <span class="spacer"></span>
+        <button data-act="close">Cancel</button>
+        <button data-act="apply" class="cp-apply">Apply</button>
+      </div>`;
+  };
+  draw();
+
+  const build = (part: Partial<{ root: string; qual: string; bass: string }>) => {
+    const p = { ...parse(symbol), ...part };
+    if (!p.root) p.root = part.root || 'C';
+    symbol = `${p.root}${p.qual}${p.bass ? `/${p.bass}` : ''}`;
+    draw();
+  };
+  const apply = () => {
+    const typed = (pop.querySelector<HTMLInputElement>('[data-act="text"]')?.value || '').trim();
+    if (!isChordToken(typed) || /^N\.?C\.?$/.test(typed)) {
+      pop.querySelector<HTMLElement>('.cp-err')!.hidden = false;
+      return;
+    }
+    const stored = transposeSymbol(typed, back);
+    // Back to what the chart says: that is no change at all.
+    setChordEdit(key, stored === orig.symbol || typed === origShown ? null : stored);
+    closeChordPicker();
+    drawSheet();
+  };
+
+  pop.addEventListener('click', (e) => {
+    const b = (e.target as Element).closest<HTMLElement>('button');
+    if (!b) return;
+    if (b.dataset.root) return build({ root: b.dataset.root });
+    if (b.dataset.qual !== undefined) return build({ qual: b.dataset.qual });
+    if (b.dataset.act === 'close') return closeChordPicker();
+    if (b.dataset.act === 'apply') return apply();
+    if (b.dataset.act === 'reset') {
+      setChordEdit(key, null);
+      closeChordPicker();
+      drawSheet();
+    }
+  });
+  pop.addEventListener('change', (e) => {
+    const t = e.target as HTMLElement;
+    if (t.dataset.act === 'bass') build({ bass: (t as HTMLSelectElement).value });
+  });
+  pop.addEventListener('input', (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.dataset.act !== 'text') return;
+    symbol = t.value.trim();
+    // Keep the grids in step with what is typed, without redrawing the box
+    // being typed in.
+    const p = parse(symbol);
+    pop.querySelectorAll<HTMLElement>('[data-root]').forEach((x) =>
+      x.classList.toggle('on', !!p.root && enh(p.root) === enh(x.dataset.root!))
+    );
+    pop.querySelectorAll<HTMLElement>('[data-qual]').forEach((x) => x.classList.toggle('on', p.qual === x.dataset.qual));
+    pop.querySelector<HTMLElement>('.cp-err')!.hidden = true;
+  });
+  pop.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') apply();
+    if (e.key === 'Escape') closeChordPicker();
+  });
+
+  // Beside the chord on a wide screen; a phone gets a sheet from the bottom
+  // (CSS), where there is no room beside anything.
+  const r = el.getBoundingClientRect();
+  const w = pop.offsetWidth;
+  const h = pop.offsetHeight;
+  const left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left - 12));
+  const below = r.bottom + 8;
+  const top = below + h > window.innerHeight - 12 ? Math.max(12, r.top - h - 8) : below;
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+  el.classList.add('picking');
+}
+
+function closeChordPicker(): void {
+  document.getElementById('chord-pick')?.remove();
+  document.querySelectorAll('.cs.picking').forEach((x) => x.classList.remove('picking'));
+}
+
+/** Any chord on the chart on screen opens the picker. Not while following,
+ *  where a tap on a line moves the follower there. */
+function wireChordPicker(): void {
+  main.addEventListener('click', (e) => {
+    const el = (e.target as Element).closest<HTMLElement>('.chart:not(.peek) .cs[data-c]');
+    if (!el || follower) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openChordPicker(el);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    const pop = document.getElementById('chord-pick');
+    if (pop && !pop.contains(e.target as Node) && !(e.target as Element).closest('.cs[data-c]')) closeChordPicker();
+  });
+}
+
 /** One chord sitting above one run of lyric text. */
 interface Cell {
   chord: string;
   text: string;
+  /** The markup around the chord: what makes it tappable, and carries the
+   *  original beside a changed one. */
+  wrap?: (html: string) => string;
 }
 
 /** Re-cut a chord line + its lyric into cells that can WRAP.
@@ -2775,23 +2974,24 @@ interface Cell {
  *  The lyric is cut at each chord column — that keeps placement faithful — and
  *  each piece is then cut again at spaces so a long run can still break. Only
  *  the first piece of a run carries the chord. */
-function toCells(chords: ChordAt[], lyric: string): Cell[] {
+function toCells(chords: ChordAt[], lyric: string, src?: number, edits: Record<string, string> = {}): Cell[] {
+  const views = new Map(chords.map((c, i) => [c, chordView(c, src === undefined ? null : `${src}:${i}`, edits)]));
   const cols = [...chords].sort((a, b) => a.at - b.at);
 
   // A line of chords with no lyric under it (an intro or turnaround).
-  if (!lyric.trim()) return cols.map((c) => ({ chord: renderSymbol(c.symbol), text: '' }));
+  if (!lyric.trim()) return cols.map((c) => ({ chord: views.get(c)!.label, text: '', wrap: views.get(c)!.wrap }));
 
   const cells: Cell[] = [];
   // Text before the first chord belongs to nobody.
   let cursor = 0;
-  const push = (chord: string, text: string) => {
+  const push = (chord: string, text: string, wrap?: (html: string) => string) => {
     // Split on spaces, keeping them, so the row can break between words.
     const parts = text.split(/(\s+)/).filter((p) => p !== '');
     if (!parts.length) {
-      cells.push({ chord, text: '' });
+      cells.push({ chord, text: '', wrap });
       return;
     }
-    parts.forEach((p, i) => cells.push({ chord: i === 0 ? chord : '', text: p }));
+    parts.forEach((p, i) => cells.push(i === 0 ? { chord, text: p, wrap } : { chord: '', text: p }));
   };
 
   if (cols.length && cols[0].at > 0) {
@@ -2802,7 +3002,8 @@ function toCells(chords: ChordAt[], lyric: string): Cell[] {
   for (let i = 0; i < cols.length; i++) {
     const start = Math.max(cursor, cols[i].at);
     const end = i + 1 < cols.length ? Math.max(start, cols[i + 1].at) : lyric.length;
-    push(renderSymbol(cols[i].symbol), lyric.slice(start, end));
+    const v = views.get(cols[i])!;
+    push(v.label, lyric.slice(start, end), v.wrap);
     cursor = end;
   }
 
@@ -2818,7 +3019,7 @@ function renderFlow(cells: Cell[]): string {
   return cells
     .map(
       (c) =>
-        `<span class="cw"><span class="cc">${c.chord ? numberMarkup(esc(c.chord)) : ''}</span>` +
+        `<span class="cw"><span class="cc">${c.chord ? (c.wrap ?? ((h: string) => h))(numberMarkup(esc(c.chord))) : ''}</span>` +
         `<span class="ct">${escLinks(c.text)}</span></span>`
     )
     .join('');
@@ -3180,12 +3381,15 @@ function chartParts(): { headline: string; body: string } {
   // Tablature is six guitar strings; on piano it is only noise.
   const { facts, chart } = displayedChart();
 
+  // The reader's own chord changes for this chart.
+  const edits = chordEdits(String(sheet.id));
   const renderLine = (l: SheetLine): string => {
-    const row = l.chords.length ? layoutChords(l.chords, renderSymbol) : '';
+    const src = lineSrc.get(l);
+    const row = l.chords.length ? chordRow(l.chords, src, edits) : '';
     if (!row && !l.lyric.trim() && !l.section) return '<div class="gap"></div>';
     // Two renderings of the same line: the exact <pre> pair for wide screens
     // and for print, and a wrapping one for phones. CSS picks.
-    const flow = renderFlow(toCells(l.chords, l.lyric));
+    const flow = renderFlow(toCells(l.chords, l.lyric, src, edits));
     // A line that is only a citation — UG's "YouTube link to the version
     // tabbed" — is worth a tap on screen and nothing at all on paper.
     // A line with no chords of its own reserves no room for them: that empty
@@ -3195,7 +3399,7 @@ function chartParts(): { headline: string; body: string } {
       <div class="${cls}" data-li="${chart.indexOf(l)}"${lineSrc.has(l) ? ` data-src="${lineSrc.get(l)}"` : ''}>
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
-          ${row.trim() ? `<pre class="chords">${numberMarkup(esc(row))}</pre>` : ''}
+          ${row.trim() ? `<pre class="chords">${row}</pre>` : ''}
           ${l.lyric.trim() ? `<pre class="lyric">${escLinks(l.lyric)}</pre>` : ''}
         </div>
         <div class="flow">${flow}</div>
@@ -3343,6 +3547,7 @@ function chartArticle(): string {
 function drawSheet(): void {
   if (!sheet) return;
   syncSongOpts();
+  closeChordPicker();
   main.innerHTML = chartArticle();
   document.getElementById('view-sheet')?.remove();
   document.body.insertAdjacentHTML('beforeend', viewSheet());
@@ -3512,7 +3717,13 @@ window.addEventListener('keydown', (ev) => {
   }
 });
 
-initNotes({ signedOut });
+initNotes({
+  signedOut,
+  chordsChanged: () => {
+    if (sheet) drawSheet();
+  },
+});
+wireChordPicker();
 route();
 
 if ('serviceWorker' in navigator) {

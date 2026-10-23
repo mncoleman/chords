@@ -14,6 +14,9 @@
 
 export interface NotesHost {
   signedOut(): void;
+  /** The chart's chord changes arrived from the server and differ from the
+   *  ones on screen: the chart needs drawing again. */
+  chordsChanged(): void;
 }
 
 interface Stroke {
@@ -40,8 +43,13 @@ type Item = Stroke | TextBox;
 interface Doc {
   text: string;
   ink: Item[];
+  /** Chords swapped by the reader: "<line>:<chord index>" -> the new symbol,
+   *  written in the chart's own key (before any transposing), so it moves
+   *  with the rest when the key changes. */
+  chords?: Record<string, string>;
   updated: number;
 }
+const hasContent = (d: Doc) => !!(d.text || d.ink.length || Object.keys(d.chords ?? {}).length);
 interface Prefs {
   color: string;
   width: number;
@@ -74,7 +82,7 @@ function keep(key: string, value: unknown): void {
   }
 }
 
-let host: NotesHost = { signedOut: () => {} };
+let host: NotesHost = { signedOut: () => {}, chordsChanged: () => {} };
 let chartId: string | null = null;
 let chartTitle = '';
 let doc: Doc = { text: '', ink: [], updated: 0 };
@@ -159,10 +167,12 @@ export function openChart(id: string | null, title = ''): void {
         return;
       }
       if (server.updated >= doc.updated || !dirty) {
-        doc = { text: server.text || '', ink: server.ink || [], updated: server.updated || 0 };
+        const before = JSON.stringify(doc.chords ?? {});
+        doc = { text: server.text || '', ink: server.ink || [], chords: server.chords || {}, updated: server.updated || 0 };
         dirty = false;
-        keep(localKey(asked), doc.text || doc.ink.length ? { doc, dirty } : null);
+        keep(localKey(asked), hasContent(doc) ? { doc, dirty } : null);
         status = 'saved';
+        if (JSON.stringify(doc.chords) !== before) host.chordsChanged();
         render();
         drawDrawer(true);
       }
@@ -205,7 +215,7 @@ function save(leaving = false): Promise<void> {
       .then(() => {
         if (chartId === id && doc.updated === sentAt) {
           dirty = false;
-          keep(localKey(id), doc.text || doc.ink.length ? { doc, dirty } : null);
+          keep(localKey(id), hasContent(doc) ? { doc, dirty } : null);
           status = 'saved';
         }
       })
@@ -398,6 +408,28 @@ function wireDrawer(el: HTMLElement): void {
   };
   handle.addEventListener('pointerup', end);
   handle.addEventListener('pointercancel', end);
+}
+
+// ---------------------------------------------------------------------------
+// Chord changes
+// ---------------------------------------------------------------------------
+
+/** A chart's chord changes. The open chart's come from its live notes; any
+ *  other chart's (a set's neighbours, a set's PDF) from this device's copy,
+ *  if it has one. */
+export function chordEdits(id: string): Record<string, string> {
+  if (id === chartId) return doc.chords ?? {};
+  return load<{ doc: Doc } | null>(localKey(id), null)?.doc?.chords ?? {};
+}
+
+/** Swap one chord of the open chart, or (null) put the original back. */
+export function setChordEdit(key: string, symbol: string | null): void {
+  if (!chartId) return;
+  const next = { ...(doc.chords ?? {}) };
+  if (symbol) next[key] = symbol;
+  else delete next[key];
+  doc.chords = next;
+  changed();
 }
 
 // ---------------------------------------------------------------------------
