@@ -1,7 +1,13 @@
 // Who a song is really by: its writers, and the artist who recorded it first.
 //
-//   GET /api/original?title=<song>&artist=<one performer of it>
-//     -> { writers: [names], original: { artist, year } | null, cover: bool | null }
+//   GET /api/original?title=<song>&artist=<one performer of it>[&also=<a>|<b>…]
+//     -> { writers, original: { artist, year } | null, cover, performers }
+//
+// `also` names other artists with a recording of the same TITLE, and
+// `performers` answers which of them (and `artist`) are confirmed to be
+// performing this same song. A title is not a song: Leonard Cohen's
+// "Hallelujah" and Forrest Frank's share nothing but the word, and labelling
+// the second a cover of the first would be wrong. Unconfirmed is left out.
 //
 // Spotify lists a dozen recordings of a title and says nothing about which one
 // is the song and which are covers. MusicBrainz does: every recording links to
@@ -71,6 +77,11 @@ export async function onRequestGet({ request, env, waitUntil }) {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   const artist = (url.searchParams.get('artist') || '').trim();
+  const also = (url.searchParams.get('also') || '')
+    .split('|')
+    .map((a) => a.trim())
+    .filter((a) => a && a.length <= 200 && norm(a) !== norm(artist))
+    .slice(0, 8);
   if (!title || !artist) return json({ error: 'title and artist are required' }, 400);
   if (title.length > 200 || artist.length > 200) return json({ error: 'Query too long' }, 400);
 
@@ -86,7 +97,7 @@ export async function onRequestGet({ request, env, waitUntil }) {
   }
 
   try {
-    let body = await lookup(title, artist).catch(() => null);
+    let body = await lookup(title, artist, also).catch(() => null);
     if (!body || (!body.writers.length && !body.original)) {
       body = (env?.GENIUS_TOKEN && (await genius(title, artist, env.GENIUS_TOKEN).catch(() => null))) || body;
     }
@@ -107,8 +118,8 @@ export async function onRequestGet({ request, env, waitUntil }) {
   }
 }
 
-async function lookup(title, artist) {
-  const none = { writers: [], original: null, cover: null };
+async function lookup(title, artist, also = []) {
+  const none = { writers: [], original: null, cover: null, performers: [] };
 
   // 1. This performance. Search ranks loosely, so keep only exact titles.
   const found = await mb(
@@ -160,7 +171,27 @@ async function lookup(title, artist) {
     if (name) original = { artist: name, year: first.begin.slice(0, 4) };
   }
 
-  return { writers, original, cover };
+  // 4. Which of the other artists sing THIS song: one search for the title
+  //    by any of them, kept where the recording is one of this work's.
+  const performers = [artist];
+  if (also.length) {
+    const ids = new Set(rels.filter((r) => r['target-type'] === 'recording' && r.recording).map((r) => r.recording.id));
+    const q = `recording:${phrase(title)} AND (${also.map((a) => `artist:${phrase(a)}`).join(' OR ')})`;
+    try {
+      const res = await mb(`/recording?query=${encodeURIComponent(q)}&limit=100`);
+      for (const r of res.recordings || []) {
+        if (!ids.has(r.id)) continue;
+        const by = norm(credit(r['artist-credit']));
+        for (const a of also) {
+          if (!performers.includes(a) && by.includes(norm(a))) performers.push(a);
+        }
+      }
+    } catch {
+      /* the asked-for artist is still confirmed; the others stay unknown */
+    }
+  }
+
+  return { writers, original, cover, performers };
 }
 
 /** The fallback. Genius answers search with title and primary artist, and the
@@ -189,5 +220,5 @@ async function genius(title, artist, token) {
     : own
       ? { artist: song.primary_artist.name, year: year(song) }
       : null;
-  return { writers, original, cover: Boolean(of) };
+  return { writers, original, cover: Boolean(of), performers: [artist] };
 }

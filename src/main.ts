@@ -124,7 +124,11 @@ let acItems: Suggestion[] = [];
 interface Origin {
   writers: string[];
   original: { artist: string; year: string | null } | null;
+  /** The artists asked about who are confirmed to sing this same song. Two
+   *  songs can share a title; a row by anyone else gets no label at all. */
+  performers?: string[];
 }
+const firstArtist = (t: Suggestion) => t.artists?.[0] || t.artist.split(',')[0].trim();
 /** Keyed by songKey. Present but null: asked, and nobody knows. */
 const origins = new Map<string, Origin | null>();
 /** Being looked up now. */
@@ -2268,9 +2272,19 @@ async function findOrigins(seq: number): Promise<void> {
       originPending.delete(k);
       continue;
     }
-    const artist = t.artists?.[0] || t.artist.split(',')[0].trim();
+    const artist = firstArtist(t);
+    // Everyone else in the list with this title, to be checked against it.
+    // Sorted, so the same list asks the same question and hits the cache.
+    const also = [
+      ...new Set(acItems.filter((x) => songKey(x) === k).map(firstArtist).filter((a) => loose(a) !== loose(artist))),
+    ]
+      .sort()
+      .slice(0, 8);
     try {
-      const res = await fetch(`/api/original?title=${encodeURIComponent(songTitle(t.title))}&artist=${encodeURIComponent(artist)}`);
+      const res = await fetch(
+        `/api/original?title=${encodeURIComponent(songTitle(t.title))}&artist=${encodeURIComponent(artist)}` +
+          (also.length ? `&also=${encodeURIComponent(also.join('|'))}` : '')
+      );
       if (res.ok) {
         const o = (await res.json()) as Origin;
         origins.set(k, o.writers?.length || o.original ? o : null);
@@ -2290,17 +2304,19 @@ function originLine(t: Suggestion): string {
   if (originPending.has(k)) return `<span class="o">${sk('9rem', 'sk-o')}</span>`;
   const o = origins.get(k);
   if (!o) return '';
+  const names = [...(t.artists ?? []), t.artist].map(loose).filter(Boolean);
+  const same = (a: string) => names.some((p) => p === a || p.includes(a) || a.includes(p));
+  if (o.original && same(loose(o.original.artist))) {
+    return '<span class="o"><span class="origtag">Original</span></span>';
+  }
+  // Not confirmed to be this song: a different song with the same title.
+  if (!(o.performers ?? []).some((p) => same(loose(p)))) return '';
   if (o.original) {
-    const by = loose(o.original.artist);
-    const performers = [...(t.artists ?? []), t.artist].map(loose).filter(Boolean);
-    if (performers.some((p) => p === by || p.includes(by) || by.includes(p))) {
-      return '<span class="o"><span class="origtag">Original</span></span>';
-    }
     const year = o.original.year ? `, ${esc(o.original.year)}` : '';
     return `<span class="o">Cover · original by ${esc(o.original.artist)}${year}</span>`;
   }
-  const names = o.writers.slice(0, 3).join(', ') + (o.writers.length > 3 ? ' and others' : '');
-  return `<span class="o">Written by ${esc(names)}</span>`;
+  const writers = o.writers.slice(0, 3).join(', ') + (o.writers.length > 3 ? ' and others' : '');
+  return `<span class="o">Written by ${esc(writers)}</span>`;
 }
 
 /** Put the dropdown away. */
