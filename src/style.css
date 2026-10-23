@@ -1179,3 +1179,13 @@ pre.lyric { color: var(--fg); }
   .cpick button { min-height: 2.75rem; }
 }
 @media print { .cpick { display: none !important; } }
+
+/* A folder's name is edited where it is shown. It reads as the title until
+   touched; the underline says it can be. */
+.foldname {
+  flex: 1 1 auto; min-width: 0; height: 2.2rem; padding: 0 0.35rem; margin: 0;
+  background: transparent; border: 0; border-bottom: 1px dashed transparent; border-radius: 0;
+  color: var(--fg); font: inherit; font-weight: 700; font-size: 1rem;
+}
+.foldname:hover { border-bottom-color: var(--line); }
+.foldname:focus { outline: none; border-bottom: 1px solid var(--accent); }

@@ -760,6 +760,8 @@ function drawFolders(): void {
 }
 
 function drawFolder(id: string, confirmDelete = false): void {
+  // The shared copy landing mid-rename would redraw the box being typed in.
+  if (document.activeElement?.id === 'fold-name') return;
   const f = library.folders.find((x) => x.id === id);
   if (!f && libraryLoading && !librarySynced) {
     main.innerHTML = `
@@ -786,7 +788,8 @@ function drawFolder(id: string, confirmDelete = false): void {
     <article class="chart admin library">
       <div class="toolbar screen-only">
         <a class="back" href="#/folders" title="Back to folders">←</a>
-        <strong>${esc(f.name)}</strong>
+        <input id="fold-name" class="foldname" value="${esc(f.name)}" aria-label="Folder name"
+               maxlength="60" autocomplete="off" spellcheck="false" title="Rename this folder">
         <div class="spacer"></div>
       </div>
       <section class="panel">
@@ -817,10 +820,6 @@ function drawFolder(id: string, confirmDelete = false): void {
         }
       </section>
       <section class="panel">
-        <form id="fold-rename" class="row" autocomplete="off">
-          <input id="fold-rename-name" value="${esc(f.name)}" aria-label="Folder name" maxlength="60">
-          <button type="submit">Rename</button>
-        </form>
         <div class="row">
           <button id="fold-delete" class="danger">${confirmDelete ? 'Tap again to delete this folder' : 'Delete folder'}</button>
           ${confirmDelete ? '<button id="fold-keep">Keep it</button>' : ''}
@@ -840,15 +839,23 @@ function drawFolder(id: string, confirmDelete = false): void {
       drawFolder(id);
     })
   );
-  document.getElementById('fold-rename')?.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = (document.getElementById('fold-rename-name') as HTMLInputElement).value.trim().slice(0, 60);
-    if (!name || name === f.name) return;
+  // The name at the top is the name: edited in place and saved as it is
+  // typed, like notes. An emptied name is not saved, and comes back on leaving.
+  const nameInput = document.getElementById('fold-name') as HTMLInputElement | null;
+  nameInput?.addEventListener('input', () => {
+    const name = nameInput.value.trim().slice(0, 60);
+    if (!name || name === folderById(id)?.name) return;
     mutateLibrary(() => {
       const g = folderById(id);
       if (g) g.name = name;
     });
-    drawFolder(id);
+    document.title = `${name} · chords`;
+  });
+  nameInput?.addEventListener('blur', () => {
+    if (!nameInput.value.trim()) nameInput.value = folderById(id)?.name ?? '';
+  });
+  nameInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') nameInput.blur();
   });
   // Two taps rather than a confirm() dialog: a folder can hold a whole set list.
   document.getElementById('fold-delete')?.addEventListener('click', () => {
@@ -3486,7 +3493,7 @@ function chartArticle(): string {
 
   const toolbar = `
     <div class="toolbar screen-only">
-      <a class="back" href="${setCtx ? `#/folders/${esc(setCtx.fid)}` : '#/'}" title="${setCtx ? 'Back to the folder' : 'Back to search'}">←</a>
+      <a class="back" href="${setCtx ? `#/folders/${esc(setCtx.fid)}` : esc(chartFrom)}" title="${setCtx || chartFrom !== '#/' ? 'Back to the folder' : 'Back to search'}">←</a>
       <div class="ctl tr">
         <span class="lbl">Key</span>
         <strong class="key">${key ? esc(key) : '—'}</strong>
@@ -3653,8 +3660,17 @@ function drawSheet(): void {
 // ---------------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------------
+/** Where the open chart was opened from, for its back arrow: a chart opened
+ *  from a folder goes back to that folder, not to the search. */
+let chartFrom = '#/';
+let lastHash = '#/';
+
 function route(): void {
   const h = location.hash || '#/';
+  if (/^#\/t\//.test(h) && !/^#\/t\//.test(lastHash)) {
+    chartFrom = /^#\/(folders|library)(\/[a-z0-9]{1,24})?$/.test(lastHash) ? lastHash : '#/';
+  }
+  lastHash = h;
   document.getElementById('gear')?.remove();
   document.getElementById('view-sheet')?.remove();
   viewOpen = false;
