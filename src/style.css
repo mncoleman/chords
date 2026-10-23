@@ -375,6 +375,10 @@ a.ext:hover { color: var(--fg); }
   position: absolute; left: -10000px; top: 0;
   visibility: hidden;
 }
+/* The printed columns sit outside .sheet, so they set in the body's sans, not
+   the chart's monospace; measured in the monospace, every line ran wider than
+   it prints. (Not on the iPhone, whose margin was measured with the old rig.) */
+.rehearse.rehearse-sans { font-family: var(--sans); }
 
 /* The masthead, measured the same way and for the same reason: it shortens the
    first page's columns, and a row of columns that overruns its page moves whole

@@ -3133,8 +3133,10 @@ const SIDE_MM = 12;
 const VERT_MM = 14 * 2 + 12;
 /** The 16pt gutter between the columns. */
 const GUTTER_MM = (16 / 72) * 25.4;
-/** Slack, in millimetres, on every page. */
-const SLACK_MM = 8;
+/** Slack, in millimetres, on every page. The iPhone's paper layout is the
+ *  one that wanders; elsewhere the rig is measured in the printed font and
+ *  VERT_MM's own 12mm and the masthead's 8mm are margin enough. */
+const SLACK_MM = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 8 : 0;
 /** A little more than the rig says, for the difference between a page laid out
  *  on a screen and the same page laid out on paper.
  *
@@ -3146,7 +3148,17 @@ const SLACK_MM = 8;
  *  equal. Packed light, a page carries some white space. Packed heavy, the
  *  column overruns its box, spills onto the next sheet, and the page that
  *  should have followed does not print at all. */
-const MEASURE_SAFETY = 1.22;
+const IOS_PRINT =
+  /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+/** Everywhere else the rig is exact once it uses the font that actually
+ *  prints. It used to measure in the chart's monospace, inherited from
+ *  .sheet, while the printed columns (outside .sheet) set in the sans: lines
+ *  wrapped in the rig that did not wrap on paper, and with the iPhone's 1.22
+ *  on top, a verse measured half again as tall as it printed — so a desktop
+ *  print left most of its first page empty. MEASURED in Chrome: rig and paper
+ *  now agree to within a few percent; this keeps a little over that. The
+ *  iPhone keeps its own measured margin and the rig it was measured with. */
+const MEASURE_SAFETY = IOS_PRINT ? 1.22 : 1.06;
 
 function printColWidthMm(): number {
   return (PAPER_W - 2 * SIDE_MM - GUTTER_MM) / 2;
@@ -3183,7 +3195,7 @@ function mastheadHeightMm(article: Element): number {
  *  element laid out at the real width, just parked off-screen. */
 function measureBlocks(blocks: HTMLElement[], lh: number): number[] {
   const rig = document.createElement('div');
-  rig.className = 'sheet rehearse printtype';
+  rig.className = `sheet rehearse printtype${IOS_PRINT ? '' : ' rehearse-sans'}`;
   rig.style.width = `${printColWidthMm()}mm`;
   rig.style.setProperty('--lh', String(lh));
   const clones = blocks.map((b) => b.cloneNode(true) as HTMLElement);
