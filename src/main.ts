@@ -10,6 +10,7 @@ import {
 } from './music';
 import { layoutChords, parseSheet, type ChordAt, type SheetLine } from './ug';
 import { Follower, buildSteps } from './follow';
+import { initNotes, inkWantsTouch, mountInk, notesButtons, openChart, wireNotesButtons } from './notes';
 
 /** Commit and build time, stamped in by vite. See buildStamp() there. */
 declare const __BUILD__: string;
@@ -50,6 +51,11 @@ const main = document.getElementById('main')!;
 let hits: Hit[] = [];
 let sheet: Sheet | null = null;
 let lines: SheetLine[] = [];
+/** Each line's place in the chart as UG wrote it. What is shown is filtered
+ *  (piano drops tab, Short drops repeats) and Short shows copies, so neither
+ *  position nor identity in the shown list says which line it is. Ink is
+ *  pinned to this. */
+const lineSrc = new WeakMap<SheetLine, number>();
 let semitones = 0;
 let numbers = false;
 /** Filled in when UG ships a chart with no tonality of its own. */
@@ -112,12 +118,43 @@ interface Suggestion {
   lyric?: boolean;
 }
 let acItems: Suggestion[] = [];
+
+/** Who a song is really by, from /api/original: Spotify lists every recording
+ *  of a title side by side and never says which one is the song. */
+interface Origin {
+  writers: string[];
+  original: { artist: string; year: string | null } | null;
+  /** The artists asked about who are confirmed to sing this same song. Two
+   *  songs can share a title; a row by anyone else gets no label at all. */
+  performers?: string[];
+}
+const firstArtist = (t: Suggestion) => t.artists?.[0] || t.artist.split(',')[0].trim();
+/** Keyed by songKey. Present but null: asked, and nobody knows. */
+const origins = new Map<string, Origin | null>();
+/** Being looked up now. */
+const originPending = new Set<string>();
+let originTimer: number | undefined;
+
+/** A song's title without what Spotify adds to a recording of it:
+ *  "Hallelujah - Remastered 2011", "Valerie (feat. Amy Winehouse)". Only
+ *  trailing brackets go; "(I Can't Get No) Satisfaction" keeps its own. */
+function songTitle(title: string): string {
+  const trailing = /\s*[([][^()[\]]*[)\]]\s*$/;
+  let t = title.split(' - ')[0].trim();
+  while (trailing.test(t) && t.replace(trailing, '')) t = t.replace(trailing, '');
+  return t;
+}
+const loose = (s: string) => s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+const songKey = (t: Suggestion) => loose(songTitle(t.title));
+
 /** The typed text the dropdown is currently open for; '' means closed. It is
  *  kept apart from acItems because the list stays open, showing the
  *  search-as-typed row, even when Spotify has nothing to offer. */
 let acRaw = '';
 /** -1 is the search-as-typed row at the top; 0+ index into acItems. */
 let acIndex = -1;
+/** Suggestions asked for and not back yet: the dropdown shows their shape. */
+let acPending = false;
 let acTimer: number | undefined;
 let acSeq = 0;
 
@@ -130,6 +167,60 @@ function signedOut(): void {
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+// ---------------------------------------------------------------------------
+// Skeletons: the shape of what is loading, drawn where it will land, so the
+// page is already laid out when it arrives rather than jumping from a line of
+// "Loading…" to a full chart.
+// ---------------------------------------------------------------------------
+const sk = (w: string, cls = '') => `<span class="sk${cls ? ` ${cls}` : ''}" style="width:${w}"></span>`;
+
+/** A chart that has not come yet: controls, title, and two sections of
+ *  chord and lyric lines. */
+function chartSkeleton(label: string, inset = !!setCtx): string {
+  const widths = [
+    ['18%', '72%'],
+    ['26%', '64%'],
+    ['14%', '80%'],
+    ['22%', '58%'],
+  ];
+  const block = (n: number) => `
+    <section class="blk">
+      ${sk('100%', 'sk-sec')}
+      ${widths
+        .slice(0, n)
+        .map(([c, l]) => `<div class="sk-pair">${sk(c, 'sk-chord')}${sk(l)}</div>`)
+        .join('')}
+    </section>`;
+  return `
+    <article class="chart skeleton${inset ? ' inset' : ''}" aria-busy="true">
+      <span class="vh">Loading ${esc(label)}</span>
+      <div class="toolbar screen-only sk-bar" aria-hidden="true">
+        ${sk('2rem', 'sk-pill')}${sk('9rem', 'sk-pill')}${sk('8rem', 'sk-pill')}${sk('6.5rem', 'sk-pill')}
+      </div>
+      <header class="masthead" aria-hidden="true">
+        ${sk('min(22rem, 70%)', 'sk-title')}
+        ${sk('10rem', 'sk-by')}
+        ${sk('6rem')}
+      </header>
+      <div class="sheet${columns === 2 ? ' cols-2' : ''}" aria-hidden="true">${block(4)}${block(3)}${block(4)}</div>
+    </article>`;
+}
+
+/** Rows of a list that has not come yet. */
+function rowsSkeleton(n: number, opts: { art?: boolean; avatar?: boolean; right?: boolean } = {}): string {
+  const titles = ['58%', '44%', '66%', '38%', '52%'];
+  const subs = ['32%', '26%', '40%', '22%', '30%'];
+  return Array.from(
+    { length: n },
+    (_, i) => `
+    <li class="sk-row" aria-hidden="true">
+      ${opts.art ? sk('34px', 'sk-art') : ''}${opts.avatar ? sk('36px', 'sk-av') : ''}
+      <span class="sk-lines">${sk(titles[i % 5])}${sk(subs[i % 5], 'sk-sub')}</span>
+      ${opts.right ? sk('3.5rem', 'sk-right') : ''}
+    </li>`
+  ).join('');
+}
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"']+/g;
 /** Its own copy: URL_RE is global, and .test() on a global regex is stateful. */
@@ -286,6 +377,7 @@ function renderHome(msg?: string): void {
         const el = document.getElementById('admin-link');
         if (el) el.insertAdjacentHTML('beforeend', '<a href="#/admin" aria-label="Users"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg><span class="lbl">Users</span></a>');
         sizeHomeNav();
+        prefetchAdmin();
       }
     } catch {
       /* the link is a convenience; the page works without it */
@@ -616,8 +708,11 @@ document.addEventListener('click', (e) => {
 function renderLibrary(folderId?: string): void {
   document.title = 'Folders · chords';
   const draw = () => (folderId ? drawFolder(folderId) : drawFolders());
+  // Started first, so the first draw knows a copy is on its way and shows
+  // the list's shape rather than "No folders yet".
+  const loading = loadLibrary(draw);
   draw();
-  void loadLibrary(draw);
+  void loading;
 }
 
 function drawFolders(): void {
@@ -644,7 +739,9 @@ function drawFolders(): void {
                 </a></li>`
                 )
                 .join('')}</ul>`
-            : '<p class="muted small">No folders yet. Make one here, or with ☆ Save on any chart.</p>'
+            : libraryLoading && !librarySynced
+              ? `<ul class="hitlist lib" aria-busy="true">${rowsSkeleton(4, { right: true })}</ul>`
+              : '<p class="muted small">No folders yet. Make one here, or with ☆ Save on any chart.</p>'
         }
       </section>
     </article>`;
@@ -663,6 +760,18 @@ function drawFolders(): void {
 
 function drawFolder(id: string, confirmDelete = false): void {
   const f = library.folders.find((x) => x.id === id);
+  if (!f && libraryLoading && !librarySynced) {
+    main.innerHTML = `
+      <article class="chart admin library" aria-busy="true">
+        <div class="toolbar screen-only">
+          <a class="back" href="#/folders" title="Back to folders">←</a>
+          ${sk('8rem')}
+          <div class="spacer"></div>
+        </div>
+        <section class="panel"><ul class="hitlist lib">${rowsSkeleton(5, { right: true })}</ul></section>
+      </article>`;
+    return;
+  }
   if (!f) {
     main.innerHTML = `
       <section class="hero">
@@ -880,7 +989,7 @@ async function renderSet(fid: string, index: number): Promise<void> {
   index = Math.max(0, Math.min(f.charts.length - 1, index));
   setCtx = { fid, index };
   const ref = f.charts[index];
-  if (!chartCache.has(ref.id)) main.innerHTML = `<p class="muted loading">Loading ${esc(ref.song)}…</p>`;
+  if (!chartCache.has(ref.id)) main.innerHTML = chartSkeleton(ref.song, true);
   let data: Sheet;
   try {
     data = await fetchChart(ref.id);
@@ -920,7 +1029,7 @@ function peekArticle(f: Folder, n: number): string {
   const ref = f.charts[n];
   const data = chartCache.get(ref.id);
   if (!data) {
-    return `<article class="chart inset"><p class="muted loading">Loading ${esc(ref.song)}…</p></article>`;
+    return chartSkeleton(ref.song, true);
   }
   const was = { sheet, lines, inferredKey, writtenNumberTonic, ctx: setCtx, ...currentOpts() };
   useChart(data);
@@ -1065,6 +1174,8 @@ function wireSwipe(art: HTMLElement): void {
     (e) => {
       active = false;
       if (!setCtx || sliding || e.touches.length !== 1) return;
+      // A pen stroke across the chart is not a swipe to the next song.
+      if (inkWantsTouch(e)) return;
       const t = e.target as Element;
       if (t.closest('input, .savepop')) return;
       // A chord line wider than the screen scrolls sideways itself (iPad).
@@ -1831,20 +1942,38 @@ async function adminPost(body: Record<string, unknown>): Promise<void> {
   void refreshAdmin();
 }
 
+/** Fetch the user list in the background once the Users link is shown, so
+ *  the first tap on it has something to draw. It never paints: by the time it
+ *  lands the reader may be anywhere. */
+function prefetchAdmin(): void {
+  fetch('/api/admin')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (d && !adminData) adminData = d;
+    })
+    .catch(() => {});
+}
+
 async function refreshAdmin(): Promise<void> {
   const res = await fetch('/api/admin');
+  // Left the page while it loaded: keep the data, leave the screen alone.
+  const here = location.hash.startsWith('#/admin');
   if (res.status === 401) return signedOut();
   if (res.status === 403) {
-    main.innerHTML = `<section class="hero"><h1>Admins only</h1><p><a href="#/">← Back</a></p></section>`;
+    if (here) main.innerHTML = `<section class="hero"><h1>Admins only</h1><p><a href="#/">← Back</a></p></section>`;
     return;
   }
   adminData = await res.json();
-  paintAdmin();
+  if (here) paintAdmin();
 }
 
 async function renderAdmin(): Promise<void> {
   document.title = 'Users · chords';
-  if (adminData) paintAdmin(); // instant on a revisit; the fetch corrects it
+  // Drawn straight away, from the last answer if there is one and as an empty
+  // page that says it is loading if not; the fetch fills in or corrects it.
+  // Waiting on the fetch before drawing left the previous page on screen, so
+  // the tap looked ignored.
+  paintAdmin();
   await refreshAdmin();
 }
 
@@ -1911,7 +2040,8 @@ function paintAdmin(): void {
       <section class="panel">
         <h2>Has access</h2>
         <ul class="people">
-          ${(() => {
+          ${!adminData ? rowsSkeleton(3, { avatar: true }) : ''}
+          ${!adminData ? '' : (() => {
             const me = data.me ?? {};
             const p: Person = me.profile ?? { name: me.name, username: me.username };
             return `<li>
@@ -1939,7 +2069,9 @@ function paintAdmin(): void {
                     )
                   )
                   .join('')
-              : '<li class="muted small">Nobody else yet.</li>'
+              : adminData
+                ? '<li class="muted small">Nobody else yet.</li>'
+                : ''
           }
         </ul>
       </section>
@@ -2110,12 +2242,87 @@ async function suggest(q: string): Promise<void> {
   // title are noise; a short one is most likely a title.
   acItems = words >= 5 ? [...lyric, ...byName] : [...byName, ...lyric];
   acIndex = -1;
+  acPending = false;
   drawAutocomplete();
+  window.clearTimeout(originTimer);
+  originTimer = window.setTimeout(() => void findOrigins(seq), 450);
+}
+
+/** Look up the original of the first few songs in the dropdown, once the
+ *  typing has paused. One at a time: MusicBrainz, behind the endpoint, asks
+ *  for about a request a second, and the top rows are the ones read. */
+async function findOrigins(seq: number): Promise<void> {
+  const asks: Suggestion[] = [];
+  for (const t of acItems) {
+    const k = songKey(t);
+    if (!k || origins.has(k) || asks.some((a) => songKey(a) === k)) continue;
+    asks.push(t);
+    if (asks.length === 3) break;
+  }
+  for (const t of asks) originPending.add(songKey(t));
+  if (asks.length) drawAutocomplete();
+  for (const t of asks) {
+    const k = songKey(t);
+    if (seq !== acSeq) {
+      // The dropdown moved on; what was not asked yet is not pending either.
+      for (const a of asks) originPending.delete(songKey(a));
+      return;
+    }
+    if (origins.has(k)) {
+      originPending.delete(k);
+      continue;
+    }
+    const artist = firstArtist(t);
+    // Everyone else in the list with this title, to be checked against it.
+    // Sorted, so the same list asks the same question and hits the cache.
+    const also = [
+      ...new Set(acItems.filter((x) => songKey(x) === k).map(firstArtist).filter((a) => loose(a) !== loose(artist))),
+    ]
+      .sort()
+      .slice(0, 8);
+    try {
+      const res = await fetch(
+        `/api/original?title=${encodeURIComponent(songTitle(t.title))}&artist=${encodeURIComponent(artist)}` +
+          (also.length ? `&also=${encodeURIComponent(also.join('|'))}` : '')
+      );
+      if (res.ok) {
+        const o = (await res.json()) as Origin;
+        origins.set(k, o.writers?.length || o.original ? o : null);
+      }
+      // Not ok: busy or down. Left unasked, to try next time.
+    } catch {
+      /* likewise */
+    }
+    originPending.delete(k);
+    if (seq === acSeq && acRaw) drawAutocomplete();
+  }
+}
+
+/** The line under a suggestion saying whose song it is, if anyone knows. */
+function originLine(t: Suggestion): string {
+  const k = songKey(t);
+  if (originPending.has(k)) return `<span class="o">${sk('9rem', 'sk-o')}</span>`;
+  const o = origins.get(k);
+  if (!o) return '';
+  const names = [...(t.artists ?? []), t.artist].map(loose).filter(Boolean);
+  const same = (a: string) => names.some((p) => p === a || p.includes(a) || a.includes(p));
+  if (o.original && same(loose(o.original.artist))) {
+    return '<span class="o"><span class="origtag">Original</span></span>';
+  }
+  // Not confirmed to be this song: a different song with the same title.
+  if (!(o.performers ?? []).some((p) => same(loose(p)))) return '';
+  if (o.original) {
+    const year = o.original.year ? `, ${esc(o.original.year)}` : '';
+    return `<span class="o">Cover · original by ${esc(o.original.artist)}${year}</span>`;
+  }
+  const writers = o.writers.slice(0, 3).join(', ') + (o.writers.length > 3 ? ' and others' : '');
+  return `<span class="o">Written by ${esc(writers)}</span>`;
 }
 
 /** Put the dropdown away. */
 function closeAutocomplete(): void {
   acItems = [];
+  acPending = false;
   acRaw = '';
   acIndex = -1;
   drawAutocomplete();
@@ -2156,10 +2363,12 @@ function drawAutocomplete(): void {
         <span class="st">
           <span class="t">${esc(t.title)}</span>
           <span class="a">${t.lyric ? '<span class="lyrictag">Lyric match</span> ' : ''}${esc(t.artist)}${t.year ? ` · ${esc(t.year)}` : ''}</span>
+          ${originLine(t)}
         </span>
       </li>`
       )
-      .join('');
+      .join('') +
+    (acPending && !acItems.length ? rowsSkeleton(4, { art: true }) : '');
   ul.hidden = false;
   input?.setAttribute('aria-expanded', 'true');
 }
@@ -2235,6 +2444,7 @@ function wireSearch(): void {
     // underneath it when the debounced lookup comes back.
     acRaw = q;
     acIndex = -1;
+    acPending = true;
     drawAutocomplete();
     acTimer = window.setTimeout(() => void suggest(q), 200);
   });
@@ -2314,7 +2524,7 @@ async function search(ask: Ask | string): Promise<void> {
   lastQuery = a.q || [a.title, a.artist].filter(Boolean).join(' ');
   const seq = ++searchSeq;
   const box = document.getElementById('results');
-  if (box) box.innerHTML = `<p class="muted loading">Searching…</p>`;
+  if (box) box.innerHTML = `<span class="vh">Searching</span><ul class="hitlist" aria-busy="true">${rowsSkeleton(5, { right: true })}</ul>`;
   searchNote = null;
 
   try {
@@ -2450,13 +2660,14 @@ async function fetchChart(id: string): Promise<Sheet> {
 function useChart(data: Sheet): void {
   sheet = data;
   lines = parseSheet(sheet.content);
+  lines.forEach((l, i) => lineSrc.set(l, i));
   const symbols = lines.flatMap((l) => l.chords.map((c) => c.symbol));
   inferredKey = sheet.key ? null : inferKey(symbols);
   writtenNumberTonic = writtenTonic(effectiveKey(), numberCapo(), symbols);
 }
 
 async function renderSheet(id: string): Promise<void> {
-  main.innerHTML = `<p class="muted loading">Loading chart…</p>`;
+  main.innerHTML = chartSkeleton('chart');
   try {
     const data = await fetchChart(id);
     useChart(data);
@@ -2522,13 +2733,20 @@ function condense(all: SheetLine[]): SheetLine[] {
 
     // A repeat with no words of its own is pure instrumental — nothing to keep.
     if (!l.lyric.trim()) {
-      if (l.section) out.push({ section: l.section, chords: [], lyric: '' });
+      if (l.section) out.push(sameLine({ section: l.section, chords: [], lyric: '' }, l));
       continue;
     }
-    out.push({ section: l.section, chords: [], lyric: l.lyric });
+    out.push(sameLine({ section: l.section, chords: [], lyric: l.lyric }, l));
   }
 
   return collapseBlanks(out);
+}
+
+/** A shortened copy of a line is still that line, for whatever is pinned to it. */
+function sameLine(copy: SheetLine, of: SheetLine): SheetLine {
+  const src = lineSrc.get(of);
+  if (src !== undefined) lineSrc.set(copy, src);
+  return copy;
 }
 
 /** Dropping lines leaves runs of blank lines behind; collapse them. */
@@ -2965,7 +3183,7 @@ function chartParts(): { headline: string; body: string } {
     // row is what double-spaced every repeated verse in the short version.
     const cls = `pair${hasUrl(l.lyric) ? ' weblink' : ''}${l.chords.length ? '' : ' bare'}`;
     return `
-      <div class="${cls}" data-li="${chart.indexOf(l)}">
+      <div class="${cls}" data-li="${chart.indexOf(l)}"${lineSrc.has(l) ? ` data-src="${lineSrc.get(l)}"` : ''}>
         ${l.section ? `<div class="section">${esc(l.section)}</div>` : ''}
         <div class="fixed">
           ${row.trim() ? `<pre class="chords">${numberMarkup(esc(row))}</pre>` : ''}
@@ -3059,6 +3277,7 @@ function chartArticle(): string {
               ? `<button id="follow-btn" class="savebtn screen-only${follower ? ' on' : ''}" title="Listen to the playing and keep the chart up with it">${follower ? '■ Stop following' : '♪ Follow'}</button>`
               : ''
           }
+          ${notesButtons()}
         </div>
         <p class="byline">${esc(sheet.artist)}</p>
         ${headline}
@@ -3153,6 +3372,9 @@ function drawSheet(): void {
   wireSaveControl();
   wireSetChrome();
   wireFollow();
+  openChart(String(sheet.id), `${sheet.song} · ${sheet.artist}`);
+  wireNotesButtons();
+  mountInk(main.querySelector<HTMLElement>('.chart:not(.peek)'));
 }
 
 // ---------------------------------------------------------------------------
@@ -3163,6 +3385,8 @@ function route(): void {
   document.getElementById('gear')?.remove();
   if (follower) stopFollow();
   if (listening && !document.getElementById('listen')) listening = null;
+  // Notes belong to a chart; anywhere else they put themselves away.
+  if (!/^#\/(t|set)\//.test(h)) openChart(null);
   const set = h.match(/^#\/set\/([a-z0-9]{1,24})(?:\/(\d{1,4}))?$/);
   if (set) {
     void renderSet(set[1], Number(set[2] || 0));
@@ -3210,13 +3434,15 @@ window.addEventListener('afterprint', () => {
 
 // Keep the search a keystroke away from anywhere.
 window.addEventListener('keydown', (ev) => {
-  if (ev.key === '/' && !/^(INPUT|TEXTAREA)$/.test((ev.target as HTMLElement).tagName)) {
+  const into = ev.target as HTMLElement;
+  if (ev.key === '/' && !/^(INPUT|TEXTAREA)$/.test(into.tagName) && !into.isContentEditable) {
     ev.preventDefault();
     if (location.hash && location.hash !== '#/') location.hash = '#/';
     else (document.getElementById('q') as HTMLInputElement | null)?.focus();
   }
 });
 
+initNotes({ signedOut });
 route();
 
 if ('serviceWorker' in navigator) {
