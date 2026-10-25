@@ -55,7 +55,7 @@ function opts(o) {
 
 /** A chart as the library keeps it. Anything else the page sent is dropped. */
 function chartRef(c, withOpts) {
-  if (!c || !/^\d{1,12}$/.test(String(c.id))) return null;
+  if (!c || !/^(\d{1,12}|c[0-9a-f]{8,800})$/.test(String(c.id))) return null;
   const r = { id: String(c.id), song: text(c.song, 200), artist: text(c.artist, 200) };
   const o = withOpts ? opts(c.opts) : undefined;
   return o ? { ...r, opts: o } : r;

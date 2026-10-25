@@ -101,7 +101,7 @@ function target(request, sub) {
   const url = new URL(request.url);
   if (url.searchParams.has('prefs')) return { key: `noteprefs:${sub}`, prefs: true };
   const id = (url.searchParams.get('id') || '').trim();
-  if (!/^\d{1,12}$/.test(id)) return { error: json({ error: 'Invalid chart id' }, 400) };
+  if (!/^(\d{1,12}|c[0-9a-f]{8,800})$/.test(id)) return { error: json({ error: 'Invalid chart id' }, 400) };
   return { key: `notes:${sub}:${id}`, prefs: false };
 }
 

@@ -1289,3 +1289,10 @@ input.switch:disabled { cursor: default; }
   .print-notes h2 { margin: 0 0 4pt; font-size: 10pt; text-transform: uppercase; letter-spacing: 0.08em; }
   .print-notes .pn-text { white-space: pre-wrap; font-size: 10pt; line-height: 1.45; }
 }
+
+/* "Search the web" on a chart that would not load. */
+.hero a.btn {
+  display: inline-block; color: var(--fg); text-decoration: none;
+  border: 1px solid var(--line); border-radius: 8px; padding: 0.55rem 1rem; font-size: 0.9rem;
+}
+.hero a.btn:hover { background: var(--card); }

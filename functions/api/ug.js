@@ -14,6 +14,8 @@
 // Cloudflare's crypto.subtle supports MD5 as a non-standard extension, which is
 // what makes the signature possible in a Worker at all.
 
+import { chordieChart, chordieSearch, isChordieId } from './_chordie.js';
+
 const UG_API = 'https://api.ultimate-guitar.com/api/v1';
 // 300 = chords. Tabs, bass and ukulele are different type ids; chords is what a
 // chord chart wants.
@@ -102,6 +104,7 @@ function rank(tabs, want = {}) {
       const quality = (rating / 5) * Math.min(1, Math.log10(votes + 1) / 4) + (verified ? 0.3 : 0);
       return {
         id: t.id,
+        songId: t.song_id ?? null,
         song: t.song_name,
         artist: t.artist_name,
         rating,
@@ -164,6 +167,26 @@ function toEdge(key, res, seconds, waitUntil) {
   return res;
 }
 
+/** UG lists charts it will not serve: a publisher takedown answers 451 on
+ *  fetch while search still shows the song. Probe the best result, and when it
+ *  is gone drop everything filed under that song, so a click never lands on a
+ *  dead end. */
+async function dropRemoved(list, headers) {
+  let results = list;
+  for (let i = 0; i < 3 && results.length; i++) {
+    const top = results[0];
+    const probe = await fetch(
+      `${UG_API}/tab/info?tab_id=${encodeURIComponent(top.id)}&tab_access_type=public`,
+      { headers }
+    ).catch(() => null);
+    if (!probe || probe.status !== 451) break;
+    const same = (r) =>
+      (top.songId && r.songId === top.songId) || (r.song === top.song && r.artist === top.artist);
+    results = results.filter((r) => !same(r));
+  }
+  return results;
+}
+
 const TAB_CACHE = 'private, max-age=86400';
 const SEARCH_CACHE = 'private, max-age=3600';
 
@@ -178,6 +201,16 @@ export async function onRequestGet({ request, waitUntil }) {
     if (cached) return cached;
 
     const headers = await ugHeaders();
+
+    if (id && isChordieId(id)) {
+      const c = await chordieChart(id);
+      if (!c) return json({ error: 'That chart could not be loaded' }, 404);
+      return toEdge(key, json(
+        { id, song: c.title, artist: 'via Chordie', key: null, capo: null, tuning: null, version: null,
+          rating: null, votes: null, url: c.url, content: c.content },
+        200, TAB_CACHE
+      ), 86400, waitUntil);
+    }
 
     if (id) {
       if (!/^\d{1,12}$/.test(id)) return json({ error: 'Invalid tab id' }, 400);
@@ -267,10 +300,36 @@ export async function onRequestGet({ request, waitUntil }) {
       // outside UG's own first twenty, and nothing downstream can rank a result
       // it was never sent.
       const ranked = rank(tabs, { title: title || q, artist, raw: q });
-      if (!ranked.length) continue;
-      results = ranked;
+      const alive = await dropRemoved(ranked, headers);
+      // Everything on this rung was taken down; a looser one may still have it.
+      if (!alive.length) continue;
+      results = alive;
       matched = rung.by;
       break;
+    }
+
+    // Too little from UG: add Chordie, but only charts whose title is the song
+    // asked for, since its search matches on any shared word.
+    if (results.length < 3) {
+      try {
+        const asked = title || normalizeTitle(q);
+        const found = await chordieSearch([asked, artist].filter(Boolean).join(' ') || q);
+        const extra = found
+          .map((f) => ({ f, fit: similarity(f.song, asked), afit: artist ? similarity(f.artist, artist) : 0 }))
+          .filter((x) => x.fit >= 0.7)
+          .sort((a, b) => b.fit + b.afit - (a.fit + a.afit))
+          .slice(0, 6)
+          .map((x) => ({
+            id: x.f.id, song: x.f.song, artist: x.f.artist, rating: 0, votes: 0, verified: false,
+            version: null, url: null, titleFit: x.fit, score: 0,
+          }));
+        if (extra.length) {
+          if (!results.length) matched = 'chordie';
+          results = [...results, ...extra];
+        }
+      } catch {
+        /* the fallback is a bonus; UG's answer stands */
+      }
     }
 
     // An empty result may be UG hiccuping, so only share-cache real matches.

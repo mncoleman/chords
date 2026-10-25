@@ -38,7 +38,7 @@ const buildLine = () => `<p class="build screen-only">Build ${esc(__BUILD__)}</p
 // transposition, Nashville numbers and printing.
 
 interface Hit {
-  id: number;
+  id: number | string;
   song: string;
   artist: string;
   rating: number;
@@ -48,7 +48,7 @@ interface Hit {
 }
 
 interface Sheet {
-  id: number;
+  id: number | string;
   song: string;
   artist: string;
   key: string | null;
@@ -1020,6 +1020,7 @@ async function renderSet(fid: string, index: number): Promise<void> {
       <section class="hero">
         <h1>Couldn't load ${esc(ref.song)}</h1>
         <p class="muted">${esc((e as Error).message)}</p>
+        ${webSearchLink(ref.song, ref.artist)}
       </section>`;
     drawSetBar();
     return;
@@ -2609,7 +2610,9 @@ async function search(ask: Ask | string): Promise<void> {
     hits = data.results ?? [];
     // The song was found, but not by the artist asked for — which is the usual
     // case for a cover: UG files the song under whoever wrote it.
-    if (hits.length && !searchNote && a.artist && (data.matched === 'title' || data.matched === 'normalized-title')) {
+    if (hits.length && !searchNote && data.matched === 'chordie') {
+      searchNote = 'Nothing on Ultimate Guitar. These charts come from Chordie.';
+    } else if (hits.length && !searchNote && a.artist && (data.matched === 'title' || data.matched === 'normalized-title')) {
       searchNote = `No Ultimate Guitar chart credited to ${a.artist}. Showing this song by other artists.`;
     }
   } catch (e) {
@@ -2698,6 +2701,23 @@ function useChart(data: Sheet): void {
   writtenNumberTonic = writtenTonic(effectiveKey(), numberCapo(), symbols);
 }
 
+/** A "search the web" link for a chart that would not load. A page cannot ask
+ *  which search engine the device prefers, so this uses Google, which is the
+ *  default nearly everywhere; it opens in the browser, outside the app. */
+function webSearchLink(song: string, artist?: string): string {
+  const q = [song, artist, 'chords'].filter((x) => x && x !== 'via Chordie').join(' ');
+  return `<p><a class="btn" href="https://www.google.com/search?q=${encodeURIComponent(q)}" target="_blank" rel="noopener noreferrer">Search the web for ${esc(song)}</a></p>`;
+}
+
+/** What a chart id was called, from anything the page already knows. */
+function nameForId(id: string): { song: string; artist: string } | null {
+  const h = hits.find((x) => String(x.id) === id);
+  if (h) return { song: h.song, artist: h.artist };
+  const refs = [...library.recents, ...library.folders.flatMap((f) => f.charts)];
+  const r = refs.find((x) => x.id === id);
+  return r ? { song: r.song, artist: r.artist } : null;
+}
+
 async function renderSheet(id: string): Promise<void> {
   main.innerHTML = chartSkeleton('chart');
   try {
@@ -2722,6 +2742,7 @@ async function renderSheet(id: string): Promise<void> {
       <section class="hero">
         <h1>Couldn't load that chart</h1>
         <p class="muted">${esc((e as Error).message)}</p>
+        ${(() => { const n = nameForId(id); return n ? webSearchLink(n.song, n.artist) : ''; })()}
         <p><a href="#/">← Search again</a></p>
       </section>`;
   }
@@ -3854,7 +3875,7 @@ function route(): void {
     renderLibrary(lib[1]);
     return;
   }
-  const m = h.match(/^#\/t\/(\d{1,12})/);
+  const m = h.match(/^#\/t\/(\d{1,12}|c[0-9a-f]{8,800})/);
   if (m) {
     void renderSheet(m[1]);
     return;
