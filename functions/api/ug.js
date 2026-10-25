@@ -185,6 +185,10 @@ export async function onRequestGet({ request, waitUntil }) {
         `${UG_API}/tab/info?tab_id=${encodeURIComponent(id)}&tab_access_type=public`,
         { headers }
       );
+      // 451: the publisher had the tab pulled. UG still lists it in search, so
+      // say what happened rather than reporting a failure.
+      if (res.status === 451)
+        return json({ error: 'Ultimate Guitar removed this chart at the publisher’s request. Try another version.' }, 404);
       if (!res.ok) return json({ error: `Ultimate Guitar returned ${res.status}` }, 502);
       const t = await res.json();
       const content = clean(t.content || t.tab_view?.wiki_tab?.content || '');

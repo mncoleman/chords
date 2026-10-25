@@ -225,7 +225,6 @@ a { color: inherit; text-decoration: none; }
   .toolbar button { padding: 0.3rem 0.35rem; min-height: 2.4rem; font-size: 0.79rem; }
   .seg button { padding: 0.3rem 0.3rem; }
   .toolbar .back { padding: 0 0.2rem; }
-  #tr-down, #tr-up { min-width: 2.2rem; min-height: 2.4rem; }
 
   /* On a phone the bar keeps only what is reached for mid-song: the key and
      letters or numbers. Length, instrument, spacing, columns and Print are
@@ -275,10 +274,13 @@ a { color: inherit; text-decoration: none; }
   /* − and + are hit mid-song, often without looking. Everything else on this
      row gives up width so these can reach a proper thumb-sized target. */
   #tr-down, #tr-up {
-    min-width: 2.6rem; min-height: 2.6rem;
+    min-width: 2.4rem; min-height: 2.4rem;
     font-size: 1.25rem; line-height: 1;
-    border: 1px solid var(--line);
+    /* The group already has a border; a second one on each button collided
+       with it. The hover/tap fill is enough to mark the target. */
+    border: 0;
   }
+  .ctl:has(#tr-down) { padding: 0.2rem 0.3rem; gap: 0.1rem; }
 
   .toolbar .viewbtn {
     display: flex; align-items: center; justify-content: center; flex: none;
